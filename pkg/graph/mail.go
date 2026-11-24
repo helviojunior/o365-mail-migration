@@ -75,7 +75,7 @@ func (c *Client) pageFolders(ctx context.Context, path string) ([]MailFolder, er
 
 // ListMessages invokes fn for every message in folderID, following pagination.
 func (c *Client) ListMessages(ctx context.Context, folderID string, fn func(Message) error) error {
-	next := fmt.Sprintf("/me/mailFolders/%s/messages?$top=50&$select=id,internetMessageId,subject,isRead,flag,categories",
+	next := fmt.Sprintf("/me/mailFolders/%s/messages?$top=50&$select=id,internetMessageId,subject,isRead,flag,categories,receivedDateTime,sentDateTime",
 		url.PathEscape(folderID))
 	for next != "" {
 		var page odataList[Message]
@@ -117,10 +117,40 @@ func (c *Client) ImportMIME(ctx context.Context, destFolderID string, mime []byt
 }
 
 // PatchMessageMeta restores metadata that MIME import does not carry: read
-// state, follow-up flag and categories.
-func (c *Client) PatchMessageMeta(ctx context.Context, msgID string, m Message) error {
-	body := patchBody{IsRead: m.IsRead, Flag: m.Flag, Categories: m.Categories}
+// state, follow-up flag and categories. When fixDates is true, it also sets the
+// original received/sent timestamps via MAPI extended properties (best effort:
+// some tenants ignore writing these on an existing message — use VerifyDates to
+// detect that).
+func (c *Client) PatchMessageMeta(ctx context.Context, msgID string, m Message, fixDates bool) error {
+	body := buildPatchBody(m, fixDates)
 	return c.patchJSON(ctx, fmt.Sprintf("/me/messages/%s", url.PathEscape(msgID)), body)
+}
+
+// buildPatchBody assembles the PATCH payload. It is a pure function so the
+// extended-property wiring can be unit-tested without a live mailbox.
+func buildPatchBody(m Message, fixDates bool) patchBody {
+	body := patchBody{IsRead: m.IsRead, Flag: m.Flag, Categories: m.Categories}
+	if fixDates {
+		if m.SentDateTime != "" {
+			body.SingleValueExtendedProperties = append(body.SingleValueExtendedProperties,
+				singleValueExtendedProperty{ID: propClientSubmitTime, Value: m.SentDateTime})
+		}
+		if m.ReceivedDateTime != "" {
+			body.SingleValueExtendedProperties = append(body.SingleValueExtendedProperties,
+				singleValueExtendedProperty{ID: propMessageDeliveryTime, Value: m.ReceivedDateTime})
+		}
+	}
+	return body
+}
+
+// GetMessageDates reads back the received/sent timestamps of a message (used to
+// verify date fidelity after a copy).
+func (c *Client) GetMessageDates(ctx context.Context, msgID string) (received, sent string, err error) {
+	var d messageDates
+	if err = c.getJSON(ctx, fmt.Sprintf("/me/messages/%s?$select=receivedDateTime,sentDateTime", url.PathEscape(msgID)), &d); err != nil {
+		return "", "", err
+	}
+	return d.ReceivedDateTime, d.SentDateTime, nil
 }
 
 // CreateChildFolder creates a child folder and returns it.

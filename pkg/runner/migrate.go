@@ -30,11 +30,16 @@ var wellKnownMap = map[string]bool{
 
 // Stats collects migration counters.
 type Stats struct {
-	Folders int64
-	Copied  int64
-	Skipped int64
-	Failed  int64
+	Folders   int64
+	Copied    int64
+	Skipped   int64
+	Failed    int64
+	DateDrift int64 // copies whose received/sent date did not match after fix (verify mode)
 }
+
+// dateTolerance is how far a copied timestamp may differ from the source before
+// it is reported as drift.
+const dateTolerance = 90 * time.Second
 
 // Migrator copies one mailbox from a source tenant to a destination tenant.
 type Migrator struct {
@@ -248,10 +253,16 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 	}
 	rec.DestMsgID = newID
 
-	// Best-effort metadata restore; a failure here is logged but the message
-	// still counts as migrated.
-	if err := m.dst.PatchMessageMeta(ctx, newID, msg); err != nil {
+	// Best-effort metadata restore (read state, flag, categories and — when
+	// enabled — the original received/sent timestamps via MAPI extended
+	// properties). A failure here is logged but the message still counts as
+	// migrated.
+	if err := m.dst.PatchMessageMeta(ctx, newID, msg, m.opts.Migrate.FixDates); err != nil {
 		log.Debugf("metadata patch failed for %q: %v", msg.Subject, err)
+	}
+
+	if m.opts.Migrate.VerifyDates {
+		m.verifyDates(ctx, newID, msg)
 	}
 
 	rec.Status = "done"
@@ -305,6 +316,41 @@ func (m *Migrator) saveFolderMap(f graph.MailFolder, destID string) {
 	}).Create(&rec).Error; err != nil {
 		log.Debugf("db save folder map: %v", err)
 	}
+}
+
+// verifyDates re-reads the copied message and reports when its received/sent
+// timestamp drifted from the source beyond dateTolerance.
+func (m *Migrator) verifyDates(ctx context.Context, destMsgID string, src graph.Message) {
+	gotRecv, gotSent, err := m.dst.GetMessageDates(ctx, destMsgID)
+	if err != nil {
+		log.Debugf("verify-dates read failed for %q: %v", src.Subject, err)
+		return
+	}
+	recvOK := withinTolerance(src.ReceivedDateTime, gotRecv)
+	sentOK := withinTolerance(src.SentDateTime, gotSent)
+	if !recvOK || !sentOK {
+		atomic.AddInt64(&m.stats.DateDrift, 1)
+		log.Warnf("date drift on %q: received src=%s dst=%s | sent src=%s dst=%s",
+			src.Subject, src.ReceivedDateTime, gotRecv, src.SentDateTime, gotSent)
+	}
+}
+
+// withinTolerance reports whether two RFC3339 timestamps are equal within
+// dateTolerance. Empty source values are treated as a match (nothing to check).
+func withinTolerance(src, dst string) bool {
+	if src == "" {
+		return true
+	}
+	ts, err1 := time.Parse(time.RFC3339, src)
+	td, err2 := time.Parse(time.RFC3339, dst)
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	diff := ts.Sub(td)
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= dateTolerance
 }
 
 func truncate(s string, n int) string {

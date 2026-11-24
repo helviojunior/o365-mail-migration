@@ -27,7 +27,15 @@ var migrateCmd = &cobra.Command{
 Copies every folder and message (Inbox, Archive, Deleted Items, Junk, Sent,
 Drafts and custom folders) from the authenticated **source** mailbox into the
 authenticated **destination** mailbox, preserving the original received/sent
-dates (via MIME re-import) plus read state, flags and categories.
+dates (via MIME re-import, reinforced by MAPI extended properties) plus read
+state, flags and categories.
+
+Date handling:
+- Primary: the original MIME (with its ` + "`Date:`/`Received:`" + ` headers) is
+  re-imported, so attachments and inline content are kept byte-for-byte.
+- Reinforcement (` + "`--fix-dates`" + `, on by default): the received/sent
+  timestamps are also written via MAPI extended properties (0x0E06 / 0x0039).
+- ` + "`--verify-dates`" + ` re-reads each copy and reports any date drift.
 
 Run ` + "`auth-source`" + ` and ` + "`auth-destination`" + ` first. The run is
 resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is set.`)),
@@ -88,9 +96,13 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 			return err
 		}
 
-		fmt.Println(ascii.Markdown(fmt.Sprintf(
+		summary := fmt.Sprintf(
 			"## Summary\n\n- Folders: **%d**\n- Copied: **%d**\n- Skipped: **%d**\n- Failed: **%d**\n",
-			stats.Folders, stats.Copied, stats.Skipped, stats.Failed)))
+			stats.Folders, stats.Copied, stats.Skipped, stats.Failed)
+		if opts.Migrate.VerifyDates {
+			summary += fmt.Sprintf("- Date drift (received/sent mismatch): **%d**\n", stats.DateDrift)
+		}
+		fmt.Println(ascii.Markdown(summary))
 
 		if errors.Is(err, context.Canceled) {
 			log.Warn("interrupted; re-run migrate to resume where it stopped")
@@ -119,6 +131,8 @@ func init() {
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy messages already recorded as migrated")
 	migrateCmd.Flags().IntVar(&opts.Migrate.MaxSizeMB, "max-size", 0, "Skip messages larger than this many MB (0 = no limit)")
+	migrateCmd.Flags().BoolVar(&opts.Migrate.FixDates, "fix-dates", true, "Also force the original received/sent dates via MAPI extended properties (0x0E06/0x0039)")
+	migrateCmd.Flags().BoolVar(&opts.Migrate.VerifyDates, "verify-dates", false, "Re-read each copied message and report received/sent date drift (extra API call per message)")
 	migrateCmd.Flags().StringArrayVar(&opts.Migrate.IncludeFolders, "include-folder", nil, "Only migrate these folder paths (repeatable; prefix match, e.g. Inbox)")
 	migrateCmd.Flags().StringArrayVar(&opts.Migrate.ExcludeFolders, "exclude-folder", nil, "Skip these folder paths (repeatable; prefix match)")
 }

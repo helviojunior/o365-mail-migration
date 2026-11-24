@@ -2,6 +2,27 @@ package runner
 
 import "testing"
 
+func TestWithinTolerance(t *testing.T) {
+	cases := []struct {
+		name     string
+		src, dst string
+		want     bool
+	}{
+		{"identical", "2024-01-15T10:30:00Z", "2024-01-15T10:30:00Z", true},
+		{"within tolerance", "2024-01-15T10:30:00Z", "2024-01-15T10:30:45Z", true},
+		{"beyond tolerance", "2024-01-15T10:30:00Z", "2024-01-15T10:40:00Z", false},
+		{"empty source is a match", "", "2024-01-15T10:30:00Z", true},
+		{"unparseable dst fails", "2024-01-15T10:30:00Z", "not-a-date", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := withinTolerance(c.src, c.dst); got != c.want {
+				t.Fatalf("withinTolerance(%q, %q) = %v, want %v", c.src, c.dst, got, c.want)
+			}
+		})
+	}
+}
+
 func TestMatchPath(t *testing.T) {
 	cases := []struct {
 		name      string

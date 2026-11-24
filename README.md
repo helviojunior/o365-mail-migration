@@ -25,7 +25,23 @@ Built in the same style as [enumdns](https://github.com/helviojunior/enumdns)
    - `POST /me/mailFolders/{dest}/messages` (Content-Type `text/plain`, base64
      body) re-imports that MIME into the destination.
    - `PATCH /me/messages/{newId}` restores `isRead`, the follow-up flag and
-     categories.
+     categories — and, with `--fix-dates` (default on), also forces the original
+     received/sent timestamps via MAPI extended properties
+     (`SystemTime 0x0E06` / `SystemTime 0x0039`) in the same request.
+
+### Date preservation
+
+The received/sent dates are preserved in two complementary ways:
+
+1. **MIME headers** — the re-imported MIME keeps its original `Date:`/`Received:`
+   headers, which Graph normally uses to set `sentDateTime`/`receivedDateTime`.
+2. **MAPI extended properties** (`--fix-dates`, default on) — the same PATCH that
+   restores read state also sets `PR_MESSAGE_DELIVERY_TIME` (0x0E06) and
+   `PR_CLIENT_SUBMIT_TIME` (0x0039). No extra request.
+
+Writing those properties on an already-imported message is **best-effort**: some
+tenants may not reflect them in `receivedDateTime`. Run with `--verify-dates` on
+a test mailbox — it re-reads each copy and reports any drift in the summary.
 
 State is tracked in a SQLite DB (`~/.mailmigrate/state.db`), so a run is
 **resumable and idempotent**: already-migrated messages are skipped unless you
@@ -77,8 +93,9 @@ Delegated scopes requested: `Mail.ReadWrite`, `MailboxSettings.Read`, `User.Read
 ## Limitations
 
 - **Received-date fidelity** relies on Graph honouring the `Received:`/`Date:`
-  headers of the re-imported MIME. Validate on a test mailbox first (compare
-  `receivedDateTime`/`sentDateTime` on a few messages).
+  headers of the re-imported MIME, reinforced by the `--fix-dates` extended
+  properties. Both are best-effort on arbitrary tenants — validate with
+  `--verify-dates` on a test mailbox first (it reports any drift).
 - **Recoverable Items (dumpster)** are not accessible via delegated Graph. The
   *Deleted Items* folder is migrated; permanently purged items are not.
 - **Very large messages** may exceed the import endpoint limit; they are logged

@@ -35,14 +35,41 @@ type Message struct {
 	IsRead            bool          `json:"isRead"`
 	Flag              *FollowupFlag `json:"flag,omitempty"`
 	Categories        []string      `json:"categories,omitempty"`
+	ReceivedDateTime  string        `json:"receivedDateTime,omitempty"`
+	SentDateTime      string        `json:"sentDateTime,omitempty"`
+}
+
+// MAPI property tags (proptag id format "{type} {proptag}") used to force the
+// original timestamps when Graph does not derive them from the MIME headers:
+//
+//	PR_CLIENT_SUBMIT_TIME    0x0039 -> sentDateTime
+//	PR_MESSAGE_DELIVERY_TIME 0x0E06 -> receivedDateTime
+const (
+	propClientSubmitTime    = "SystemTime 0x0039"
+	propMessageDeliveryTime = "SystemTime 0x0E06"
+)
+
+// singleValueExtendedProperty is one entry of a message's
+// singleValueExtendedProperties collection.
+type singleValueExtendedProperty struct {
+	ID    string `json:"id"`
+	Value string `json:"value"`
 }
 
 // patchBody is what we PATCH onto a freshly imported message to restore the
-// metadata that MIME import does not carry.
+// metadata that MIME import does not carry (read state, flag, categories) and,
+// optionally, the original received/sent timestamps via extended properties.
 type patchBody struct {
-	IsRead     bool          `json:"isRead"`
-	Flag       *FollowupFlag `json:"flag,omitempty"`
-	Categories []string      `json:"categories,omitempty"`
+	IsRead                        bool                          `json:"isRead"`
+	Flag                          *FollowupFlag                 `json:"flag,omitempty"`
+	Categories                    []string                      `json:"categories,omitempty"`
+	SingleValueExtendedProperties []singleValueExtendedProperty `json:"singleValueExtendedProperties,omitempty"`
+}
+
+// messageDates is the minimal projection used to verify timestamps after a copy.
+type messageDates struct {
+	ReceivedDateTime string `json:"receivedDateTime"`
+	SentDateTime     string `json:"sentDateTime"`
 }
 
 // odataList is the generic Graph collection envelope.

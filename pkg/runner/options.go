@@ -29,5 +29,7 @@ type Options struct {
 		Yes            bool
 		Force          bool
 		MaxSizeMB      int
+		FixDates       bool // also set original received/sent via MAPI extended props
+		VerifyDates    bool // re-read each copy and report date drift
 	}
 }
