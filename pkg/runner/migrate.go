@@ -55,6 +55,13 @@ type Migrator struct {
 	dbMu       sync.Mutex
 	stats      Stats
 	progress   *ascii.Progress
+	sem        chan struct{} // global cap on concurrent message operations
+}
+
+// folderJob pairs a source folder with its resolved destination folder id.
+type folderJob struct {
+	folder graph.MailFolder
+	destID string
 }
 
 // NewMigrator resolves both identities and the destination mailbox root.
@@ -81,28 +88,31 @@ func (m *Migrator) SourceUser() *graph.User { return m.srcUser }
 func (m *Migrator) DestUser() *graph.User   { return m.dstUser }
 
 // Run performs the migration (or a dry run). It returns the collected stats.
+//
+// It works in two phases: first the destination folder tree is created
+// sequentially (so parents exist before children), then messages are copied
+// with several folders in flight at once — each in-flight folder gets its own
+// live progress bar, while a global semaphore caps concurrent Graph operations.
 func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 	folders, err := m.src.ListFolders(ctx)
 	if err != nil {
 		return m.stats, fmt.Errorf("listing source folders: %w", err)
 	}
 
-	mapBySrcID := map[string]string{} // source folder id -> dest folder id
-
-	// Grand total of messages across selected folders drives the overall
-	// percentage and ETA (not counted for a dry run).
-	var grandTotal int64
-	if !m.opts.Migrate.DryRun {
+	if m.opts.Migrate.DryRun {
 		for _, f := range folders {
 			if m.folderSelected(f.Path) {
-				grandTotal += int64(f.TotalItemCount)
+				log.Infof("[dry-run] %s  (%d messages)", f.Path, f.TotalItemCount)
+				atomic.AddInt64(&m.stats.Folders, 1)
 			}
 		}
+		return m.stats, nil
 	}
-	m.progress = ascii.NewProgress(grandTotal, !m.opts.Logging.Silence && !m.opts.Migrate.DryRun)
-	m.progress.Start()
-	defer m.progress.Finish()
 
+	// Phase 1: create the destination folder tree (sequential, parents first).
+	mapBySrcID := map[string]string{}
+	var jobs []folderJob
+	var grandTotal int64
 	for _, f := range folders {
 		if ctx.Err() != nil {
 			return m.stats, ctx.Err()
@@ -111,38 +121,65 @@ func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 			log.Debugf("skipping folder (filtered): %s", f.Path)
 			continue
 		}
-
-		if m.opts.Migrate.DryRun {
-			log.Infof("[dry-run] %s  (%d messages)", f.Path, f.TotalItemCount)
-			atomic.AddInt64(&m.stats.Folders, 1)
-			continue
-		}
-
 		destID, err := m.ensureDestFolder(ctx, f, mapBySrcID)
 		if err != nil {
-			m.progress.Clear()
 			log.Error("failed to create destination folder", "path", f.Path, "err", err)
 			atomic.AddInt64(&m.stats.Failed, 1)
 			continue
 		}
 		mapBySrcID[f.ID] = destID
 		atomic.AddInt64(&m.stats.Folders, 1)
-
 		m.saveFolderMap(f, destID)
-
-		m.progress.SetFolder(f.Path, int64(f.TotalItemCount))
-		if !m.progress.Enabled() {
-			log.Warnf("Folder: %s (%d messages)", f.Path, f.TotalItemCount)
-		}
-		if err := m.copyFolderMessages(ctx, f, destID); err != nil {
-			if ctx.Err() != nil {
-				return m.stats, ctx.Err()
-			}
-			m.progress.Clear()
-			log.Error("error copying folder", "path", f.Path, "err", err)
-		}
+		jobs = append(jobs, folderJob{folder: f, destID: destID})
+		grandTotal += int64(f.TotalItemCount)
 	}
 
+	// Phase 2: copy messages, several folders at a time.
+	m.progress = ascii.NewProgress(grandTotal, !m.opts.Logging.Silence)
+	m.progress.Start()
+	defer m.progress.Finish()
+
+	threads := m.opts.Migrate.Threads
+	if threads < 1 {
+		threads = 1
+	}
+	m.sem = make(chan struct{}, threads)
+
+	folderConc := m.opts.Migrate.FolderConcurrency
+	if folderConc < 1 {
+		folderConc = 1
+	}
+	folderSem := make(chan struct{}, folderConc)
+	var wg sync.WaitGroup
+
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		folderSem <- struct{}{}
+		go func(j folderJob) {
+			defer wg.Done()
+			defer func() { <-folderSem }()
+
+			bar := m.progress.StartFolder(j.folder.Path, j.folder.TotalItemCount)
+			defer bar.Done()
+
+			if !m.progress.Enabled() {
+				log.Warnf("Folder: %s (%d messages)", j.folder.Path, j.folder.TotalItemCount)
+			}
+			if err := m.copyFolderMessages(ctx, j.folder, j.destID, bar); err != nil {
+				if ctx.Err() == nil && !m.progress.SuppressLogs() {
+					log.Error("error copying folder", "path", j.folder.Path, "err", err)
+				}
+			}
+		}(j)
+	}
+	wg.Wait()
+
+	if ctx.Err() != nil {
+		return m.stats, ctx.Err()
+	}
 	return m.stats, nil
 }
 
@@ -200,14 +237,10 @@ func (m *Migrator) ensureDestFolder(ctx context.Context, src graph.MailFolder, m
 	return created.ID, nil
 }
 
-// copyFolderMessages copies every message of a source folder into destID using
-// a bounded worker pool.
-func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder, destID string) error {
-	threads := m.opts.Migrate.Threads
-	if threads < 1 {
-		threads = 1
-	}
-	sem := make(chan struct{}, threads)
+// copyFolderMessages copies every message of a source folder into destID. Each
+// message copy is gated by the migrator's global semaphore so total concurrency
+// stays bounded even with several folders in flight.
+func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder, destID string, bar *ascii.FolderBar) error {
 	var wg sync.WaitGroup
 
 	listErr := m.src.ListMessages(ctx, src.ID, func(msg graph.Message) error {
@@ -215,11 +248,16 @@ func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder,
 			return ctx.Err()
 		}
 		wg.Add(1)
-		sem <- struct{}{}
+		select {
+		case m.sem <- struct{}{}:
+		case <-ctx.Done():
+			wg.Done()
+			return ctx.Err()
+		}
 		go func(msg graph.Message) {
 			defer wg.Done()
-			defer func() { <-sem }()
-			m.copyOne(ctx, src.Path, destID, msg)
+			defer func() { <-m.sem }()
+			m.copyOne(ctx, src.Path, destID, msg, bar)
 		}(msg)
 		return nil
 	})
@@ -228,8 +266,8 @@ func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder,
 	return listErr
 }
 
-func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message) {
-	defer m.progress.Inc() // exactly one tick per message, whatever the outcome
+func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message, bar *ascii.FolderBar) {
+	defer bar.Inc() // exactly one tick per message, whatever the outcome
 
 	key := msg.InternetMessageID
 	if key == "" {
@@ -265,8 +303,9 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 		rec.Error = fmt.Sprintf("message %d bytes exceeds --max-size %d MB", len(mime), max)
 		atomic.AddInt64(&m.stats.Skipped, 1)
 		m.saveMsg(&rec)
-		m.progress.Clear()
-		log.Warnf("skip (too large): %s", msg.Subject)
+		if !m.progress.SuppressLogs() {
+			log.Warnf("skip (too large): %s", msg.Subject)
+		}
 		return
 	}
 
@@ -300,8 +339,9 @@ func (m *Migrator) fail(rec *models.MessageMigration, err error) {
 	rec.Error = err.Error()
 	atomic.AddInt64(&m.stats.Failed, 1)
 	m.saveMsg(rec)
-	m.progress.Clear()
-	log.Error("message failed", "subject", rec.Subject, "err", err)
+	if !m.progress.SuppressLogs() {
+		log.Error("message failed", "subject", rec.Subject, "err", err)
+	}
 }
 
 func (m *Migrator) alreadyDone(dedupKey string) bool {
@@ -355,7 +395,9 @@ func (m *Migrator) verifyDates(ctx context.Context, destMsgID string, src graph.
 	sentOK := withinTolerance(src.SentDateTime, gotSent)
 	if !recvOK || !sentOK {
 		atomic.AddInt64(&m.stats.DateDrift, 1)
-		m.progress.Clear()
+		if m.progress.SuppressLogs() {
+			return
+		}
 		log.Warnf("date drift on %q: received src=%s dst=%s | sent src=%s dst=%s",
 			src.Subject, src.ReceivedDateTime, gotRecv, src.SentDateTime, gotSent)
 	}

@@ -126,7 +126,8 @@ func confirm(question string) bool {
 func init() {
 	rootCmd.AddCommand(migrateCmd)
 
-	migrateCmd.Flags().IntVarP(&opts.Migrate.Threads, "threads", "t", 4, "Concurrent message copies per folder")
+	migrateCmd.Flags().IntVarP(&opts.Migrate.Threads, "threads", "t", 4, "Global cap on concurrent message copies (across all folders)")
+	migrateCmd.Flags().IntVar(&opts.Migrate.FolderConcurrency, "folder-concurrency", 4, "How many folders to migrate at once (each shows its own progress bar)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.DryRun, "dry-run", false, "List folders and message counts without copying")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy messages already recorded as migrated")

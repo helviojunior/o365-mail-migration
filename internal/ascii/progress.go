@@ -4,79 +4,74 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/pterm/pterm"
 	"golang.org/x/term"
 )
 
-// spinnerFrames are cycled on each render tick (TTY mode).
-var spinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+const nonTTYInterval = 60 * time.Second
 
-const (
-	ttyInterval    = 150 * time.Millisecond
-	nonTTYInterval = 60 * time.Second
-)
-
-// Progress reports migration progress (spinner, bar, per-folder counter,
-// overall percentage, elapsed and ETA). On a TTY it redraws a single live line;
-// when the output is not a TTY it instead logs a plain snapshot every 60s. When
-// disabled (quiet mode or dry-run) every method is a no-op.
+// Progress reports migration progress. On a TTY it renders one live pterm
+// progress bar per in-flight folder (docker-compose style: a bar appears when a
+// folder starts and leaves the screen when it completes). When the output is
+// not a TTY it logs a plain "[status] ..." snapshot every 60s. When disabled
+// (quiet mode or dry-run) every method is a no-op.
 type Progress struct {
 	// 64-bit counters first for alignment on 32-bit platforms.
-	done       int64
-	folderDone int64
-	folderTot  int64
+	done   int64
+	active int64
 
-	out     io.Writer
 	enabled bool
 	tty     bool
 	total   int64
 	start   time.Time
-	frame   int
 
-	folderName atomic.Value // string
+	out   io.Writer
+	multi *pterm.MultiPrinter
 
-	mu     sync.Mutex
 	stopCh chan struct{}
 	doneCh chan struct{}
+	mu     sync.Mutex
 }
 
 // NewProgress creates a reporter for a run of total messages. enabled is
 // typically "not quiet and not a dry-run"; TTY vs non-TTY is detected here.
 func NewProgress(total int64, enabled bool) *Progress {
-	p := &Progress{
+	return &Progress{
 		out:     os.Stderr,
 		enabled: enabled,
-		tty:     term.IsTerminal(int(os.Stderr.Fd())),
+		tty:     term.IsTerminal(int(os.Stdout.Fd())),
 		total:   total,
 	}
-	p.folderName.Store("")
-	return p
 }
 
 // Enabled reports whether progress reporting is active at all.
 func (p *Progress) Enabled() bool { return p != nil && p.enabled }
 
-// Start begins the redraw/snapshot loop.
+// SuppressLogs reports whether live logging must be withheld to avoid
+// corrupting the pterm live area (true only in TTY mode).
+func (p *Progress) SuppressLogs() bool { return p.Enabled() && p.tty }
+
+// Start begins rendering.
 func (p *Progress) Start() {
 	if !p.Enabled() {
 		return
 	}
 	p.start = time.Now()
+	if p.tty {
+		m := pterm.DefaultMultiPrinter
+		p.multi = &m
+		p.multi.Start()
+		return
+	}
+	// Non-TTY: periodic textual snapshots.
 	p.stopCh = make(chan struct{})
 	p.doneCh = make(chan struct{})
-
-	interval := nonTTYInterval
-	if p.tty {
-		interval = ttyInterval
-		io.WriteString(p.out, "\033[?25l") // hide cursor
-	}
-
 	go func() {
-		t := time.NewTicker(interval)
+		t := time.NewTicker(nonTTYInterval)
 		defer t.Stop()
 		defer close(p.doneCh)
 		for {
@@ -84,95 +79,112 @@ func (p *Progress) Start() {
 			case <-p.stopCh:
 				return
 			case <-t.C:
-				if p.tty {
-					p.frame++
-					p.renderLive()
-				} else {
-					p.renderSnapshot()
-				}
+				p.snapshot()
 			}
 		}
 	}()
 }
 
-// SetFolder switches the current folder and resets its counter.
-func (p *Progress) SetFolder(name string, total int64) {
-	if !p.Enabled() {
-		return
-	}
-	p.folderName.Store(name)
-	atomic.StoreInt64(&p.folderTot, total)
-	atomic.StoreInt64(&p.folderDone, 0)
-}
-
-// Inc records one processed message (copied, skipped or failed).
-func (p *Progress) Inc() {
-	if !p.Enabled() {
-		return
-	}
-	atomic.AddInt64(&p.done, 1)
-	atomic.AddInt64(&p.folderDone, 1)
-}
-
-// Clear erases the live status line (TTY only). Call it before writing a log
-// line so output is not corrupted; the next tick redraws the line.
-func (p *Progress) Clear() {
-	if !p.Enabled() || !p.tty {
-		return
-	}
-	p.mu.Lock()
-	io.WriteString(p.out, "\r\033[K")
-	p.mu.Unlock()
-}
-
-// Finish stops the loop and leaves the terminal clean. On a non-TTY it emits a
-// final snapshot so the log ends at 100%.
+// Finish stops rendering and leaves the terminal clean.
 func (p *Progress) Finish() {
 	if !p.Enabled() {
 		return
 	}
+	if p.tty {
+		if p.multi != nil {
+			p.multi.Stop()
+		}
+		return
+	}
 	close(p.stopCh)
 	<-p.doneCh
-	if p.tty {
-		p.Clear()
-		io.WriteString(p.out, "\033[?25h") // show cursor
-	} else {
-		p.renderSnapshot()
+	p.snapshot() // final 100% line
+}
+
+// FolderBar is a per-folder progress handle.
+type FolderBar struct {
+	p     *Progress
+	pb    *pterm.ProgressbarPrinter
+	mu    sync.Mutex
+	total int
+	done  int
+}
+
+// StartFolder begins tracking a folder of total messages. A TTY gets a live
+// bar; empty folders get no bar.
+func (p *Progress) StartFolder(name string, total int) *FolderBar {
+	if !p.Enabled() {
+		return &FolderBar{p: p, total: total}
+	}
+	atomic.AddInt64(&p.active, 1)
+
+	fb := &FolderBar{p: p, total: total}
+	if p.tty && total > 0 {
+		// Serialize pterm writer/bar creation: MultiPrinter.NewWriter appends to
+		// a shared slice and folders start concurrently.
+		p.mu.Lock()
+		bar, err := pterm.DefaultProgressbar.
+			WithTotal(total).
+			WithWriter(p.multi.NewWriter()).
+			WithRemoveWhenDone(true).
+			WithTitle(trimMiddle(name, 32)).
+			WithShowCount(true).
+			WithShowPercentage(true).
+			WithShowElapsedTime(true).
+			Start()
+		p.mu.Unlock()
+		if err == nil {
+			fb.pb = bar
+		}
+	}
+	return fb
+}
+
+// Inc records one processed message in this folder.
+func (fb *FolderBar) Inc() {
+	if !fb.p.Enabled() {
+		return
+	}
+	atomic.AddInt64(&fb.p.done, 1)
+
+	fb.mu.Lock()
+	defer fb.mu.Unlock()
+	fb.done++
+	if fb.pb != nil && fb.done <= fb.total {
+		fb.pb.Increment()
 	}
 }
 
-func (p *Progress) renderLive() {
-	spin := spinnerFrames[p.frame%len(spinnerFrames)]
-	line := fmt.Sprintf("\r\033[K%s %s %s", spin, bar(p.pct(), 18), p.status(true))
-	p.mu.Lock()
-	io.WriteString(p.out, line)
-	p.mu.Unlock()
+// Done completes the folder: fills the bar and removes it from the screen.
+func (fb *FolderBar) Done() {
+	if !fb.p.Enabled() {
+		return
+	}
+	atomic.AddInt64(&fb.p.active, -1)
+
+	fb.mu.Lock()
+	defer fb.mu.Unlock()
+	if fb.pb != nil {
+		if rem := fb.total - fb.done; rem > 0 {
+			fb.pb.Add(rem)
+		}
+		fb.pb.Stop() //nolint:errcheck // idempotent; nothing actionable on error
+		fb.pb = nil
+	}
 }
 
-func (p *Progress) renderSnapshot() {
-	line := fmt.Sprintf("[status] %s\n", p.status(false))
-	p.mu.Lock()
-	io.WriteString(p.out, line)
-	p.mu.Unlock()
-}
-
-func (p *Progress) pct() float64 {
+func (p *Progress) snapshot() {
 	done := atomic.LoadInt64(&p.done)
-	if p.total <= 0 {
-		return 0
-	}
-	v := float64(done) / float64(p.total) * 100
-	if v > 100 {
-		v = 100
-	}
-	return v
-}
-
-// status builds the shared metrics string. When pad is true (TTY) the folder
-// name is padded to keep the line length stable between redraws.
-func (p *Progress) status(pad bool) string {
-	done := atomic.LoadInt64(&p.done)
+	active := atomic.LoadInt64(&p.active)
 	elapsed := time.Since(p.start)
+
+	pct := 0.0
+	if p.total > 0 {
+		pct = float64(done) / float64(p.total) * 100
+		if pct > 100 {
+			pct = 100
+		}
+	}
 
 	eta := "--"
 	if done > 0 && p.total > 0 && done < p.total {
@@ -180,35 +192,19 @@ func (p *Progress) status(pad bool) string {
 		eta = fmtDuration(per * time.Duration(p.total-done))
 	}
 
-	name, _ := p.folderName.Load().(string)
-	if pad {
-		name = trimMiddle(name, 28)
-	}
-	fd := atomic.LoadInt64(&p.folderDone)
-	ft := atomic.LoadInt64(&p.folderTot)
+	line := fmt.Sprintf("[status] %5.1f%% | %d/%d msgs | %d folders active | %s elapsed | ETA %s\n",
+		pct, done, p.total, active, fmtDuration(elapsed), eta)
 
-	return fmt.Sprintf("%5.1f%% | %d/%d msgs | %s %d/%d | %s elapsed | ETA %s",
-		p.pct(), done, p.total, name, fd, ft, fmtDuration(elapsed), eta)
+	p.mu.Lock()
+	io.WriteString(p.out, line)
+	p.mu.Unlock()
 }
 
-// bar renders a [####----] progress bar of the given width.
-func bar(pct float64, width int) string {
-	filled := int(pct / 100 * float64(width))
-	if filled > width {
-		filled = width
-	}
-	if filled < 0 {
-		filled = 0
-	}
-	return "[" + strings.Repeat("#", filled) + strings.Repeat("-", width-filled) + "]"
-}
-
-// trimMiddle shortens s to max runes, keeping head and tail with an ellipsis,
-// padding with spaces when shorter so the rendered line length is stable.
+// trimMiddle shortens s to max runes, keeping head and tail with an ellipsis.
 func trimMiddle(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
-		return s + strings.Repeat(" ", max-len(r))
+		return s
 	}
 	if max <= 1 {
 		return string(r[:max])
