@@ -1,0 +1,41 @@
+# Binaries for programs and plugins
+*.exe
+*.dll
+*.so
+*.dylib
+*.sqlite3
+*.jsonl
+mailmigrate
+mailmigrate.exe
+*.version
+*.verstr
+*.ldflags
+
+# dep vendor/
+vendor/
+
+# build artifacts
+build/
+
+# Local token caches and state (NEVER commit these - they hold OAuth tokens)
+*.token
+.mailmigrate/
+
+# Test binary, build with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+.glide/
+.DS_Store
+.idea/
+
+# Agents
+AGENTS.md
+agents/
+CLAUDE.md
+
+# Go
+.gocache/

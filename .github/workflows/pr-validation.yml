@@ -1,0 +1,123 @@
+name: Pull Request Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+    types: [opened, synchronize, reopened, ready_for_review]
+
+jobs:
+  pr-gate:
+    name: PR Gate - Quality Checks
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+    - name: Checkout PR code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+
+    - name: Download dependencies
+      run: |
+        go mod download
+        go mod verify
+
+    - name: Validate go.mod and go.sum
+      run: |
+        go mod tidy
+        if ! git diff --exit-code go.mod go.sum; then
+          echo "❌ go.mod or go.sum is not up to date. Please run 'go mod tidy'"
+          exit 1
+        fi
+        echo "✅ go.mod and go.sum are up to date"
+
+    - name: Check code formatting
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "❌ Code is not properly formatted"
+          gofmt -s -l .
+          exit 1
+        fi
+        echo "✅ Code formatting is correct"
+
+    - name: Run go vet
+      run: |
+        if ! go vet ./...; then
+          echo "❌ go vet found issues"
+          exit 1
+        fi
+        echo "✅ go vet passed"
+
+    - name: Install and run staticcheck
+      run: |
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+        if ! staticcheck ./...; then
+          echo "❌ staticcheck found issues"
+          exit 1
+        fi
+        echo "✅ staticcheck passed"
+
+    - name: Run unit tests
+      run: |
+        if ! go test -v -race -timeout=10m ./...; then
+          echo "❌ Unit tests failed"
+          exit 1
+        fi
+        echo "✅ All unit tests passed"
+
+    - name: Build application
+      run: |
+        if ! go build -v -o mailmigrate .; then
+          echo "❌ Build failed"
+          exit 1
+        fi
+        echo "✅ Build successful"
+
+    - name: Test binary execution
+      run: |
+        if ! ./mailmigrate --help > /dev/null 2>&1; then
+          echo "❌ Binary execution failed"
+          exit 1
+        fi
+        ./mailmigrate version || echo "Version command test"
+        echo "✅ Binary executes correctly"
+
+  security-validation:
+    name: Security Validation
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+
+    steps:
+    - name: Checkout PR code
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+
+    - name: Run security checks
+      run: |
+        go install github.com/securego/gosec/v2/cmd/gosec@latest
+        gosec -concurrency 1 -quiet -no-fail ./...
+        echo "✅ Security scan completed (issues reported but not blocking)"
+
+    - name: Check for hardcoded secrets (detailed)
+      run: |
+        if grep -r -E "(password|passwd|pwd|secret|api_key|apikey)\s*[:=]\s*['\"]?[a-zA-Z0-9+/]{16,}" . \
+           --include="*.go" --include="*.yaml" --include="*.yml" --include="*.json" \
+           --exclude-dir=".git" --exclude="*.md"; then
+          echo "❌ Potential secrets found in code"
+          exit 1
+        fi
+        echo "✅ No hardcoded secrets detected"

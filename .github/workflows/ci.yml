@@ -1,0 +1,117 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+permissions:
+  contents: read
+  security-events: write
+  pull-requests: write
+
+jobs:
+  # Code validation and tests
+  test:
+    name: Test and Validate
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+      with:
+        fetch-depth: 0
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+
+    - name: Download dependencies
+      run: |
+        go mod download
+        go mod verify
+
+    - name: Install lint tools
+      run: |
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+
+    - name: Run gofmt check
+      run: |
+        if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+          echo "❌ Code is not formatted. Please run 'gofmt -s -w .'"
+          gofmt -s -l .
+          exit 1
+        fi
+        echo "✅ Code formatting is correct"
+
+    - name: Run go vet
+      run: |
+        if ! go vet ./...; then
+          echo "❌ go vet found issues"
+          exit 1
+        fi
+        echo "✅ go vet passed"
+
+    - name: Run staticcheck
+      run: |
+        if ! staticcheck ./...; then
+          echo "❌ staticcheck found issues"
+          exit 1
+        fi
+        echo "✅ staticcheck passed"
+
+    - name: Run unit tests
+      run: |
+        go test -v -race -timeout=10m ./...
+
+    - name: Build application
+      run: |
+        echo "Building mailmigrate..."
+        if ! go build -v -o mailmigrate .; then
+          echo "❌ Build failed"
+          exit 1
+        fi
+        echo "✅ Build successful"
+
+    - name: Test binary execution
+      run: |
+        ./mailmigrate --help > /dev/null 2>&1 || { echo "❌ Binary execution failed"; exit 1; }
+        ./mailmigrate version || echo "Version command test"
+        ./mailmigrate auth-source --help > /dev/null || echo "auth-source help test"
+        ./mailmigrate auth-destination --help > /dev/null || echo "auth-destination help test"
+        ./mailmigrate migrate --help > /dev/null || echo "migrate help test"
+        echo "✅ Command tests completed"
+
+  # Security analysis
+  security:
+    name: Security Analysis
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v6
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'go.mod'
+
+    - name: Run Gosec Security Scanner
+      uses: securego/gosec@master
+      with:
+        args: '-concurrency 1 -quiet -no-fail -fmt sarif -out gosec-results.sarif ./...'
+      timeout-minutes: 5
+
+    - name: Check for hardcoded secrets
+      uses: trufflesecurity/trufflehog@main
+      with:
+        path: ./
+        base: ${{ github.event.pull_request.base.sha || github.event.before }}
+        head: ${{ github.event.pull_request.head.sha || github.sha }}
