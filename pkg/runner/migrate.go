@@ -37,6 +37,7 @@ type Stats struct {
 	Failed     int64
 	DateDrift  int64 // copies whose received/sent date did not match after fix (verify mode)
 	MetaFailed int64 // copies whose metadata PATCH (read/flags/dates) failed
+	SaveFailed int64 // state-DB writes that failed (resume/dedup silently degraded)
 
 	// Mailbox settings (final step).
 	SettingsRun bool
@@ -475,11 +476,20 @@ func (m *Migrator) alreadyDone(dedupKey string) bool {
 func (m *Migrator) saveMsg(rec *models.MessageMigration) {
 	m.dbMu.Lock()
 	defer m.dbMu.Unlock()
+	// NOTE: these are DB column names (GORM derives them from the Go field
+	// names, not the json tags). DestMsgID -> dest_msg_id, NOT dest_message_id:
+	// the latter does not exist, and referencing it made the upsert's
+	// `excluded.<col>` clause fail at prepare time, silently dropping every
+	// message row (folder_maps uses only valid columns, which is why it saved).
 	if err := m.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "dedup_key"}},
-		DoUpdates: clause.AssignmentColumns([]string{"dest_message_id", "status", "error", "size_bytes", "migrated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"dest_msg_id", "status", "error", "size_bytes", "migrated_at"}),
 	}).Create(rec).Error; err != nil {
-		log.Debugf("db save message: %v", err)
+		// A failed state write is not cosmetic: it silently disables resume and
+		// local dedup, so the next run re-scans and re-copies everything. Make
+		// it visible (and counted) instead of hiding it at debug level.
+		atomic.AddInt64(&m.stats.SaveFailed, 1)
+		log.Warnf("state DB write failed for %q (resume/dedup degraded): %v", rec.DedupKey, err)
 	}
 }
 

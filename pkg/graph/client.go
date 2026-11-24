@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/helviojunior/o365-mail-migration/pkg/log"
@@ -19,11 +21,21 @@ const BaseURL = "https://graph.microsoft.com/v1.0"
 // maxRetries bounds throttling/transient retries per request.
 const maxRetries = 6
 
-// Client is a small Graph REST client with token injection and throttling
-// aware retries.
+// Client is a small Graph REST client with token injection and a shared,
+// tenant-wide throttle gate.
+//
+// Each Client talks to exactly one mailbox/tenant, so its gate is per-tenant:
+// when Graph throttles any request (429/503/504), the gate pauses every
+// in-flight and future request on this Client until the Retry-After window
+// elapses. That makes all workers back off together instead of each retrying
+// independently and re-triggering throttling (a thundering herd), which is the
+// main reason sustained migrations collapse to a crawl over time.
 type Client struct {
 	auth *Authenticator
 	http *http.Client
+
+	gateMu      sync.Mutex
+	pausedUntil time.Time // no request sends before this instant
 }
 
 // NewClient builds a Graph client that authenticates with auth.
@@ -32,6 +44,40 @@ func NewClient(auth *Authenticator) *Client {
 		auth: auth,
 		http: &http.Client{Timeout: 5 * time.Minute},
 	}
+}
+
+// waitGate blocks until the shared throttle pause (if any) has elapsed, so a
+// throttled tenant stops all its traffic together. It returns ctx.Err() if the
+// context is cancelled while waiting.
+func (c *Client) waitGate(ctx context.Context) error {
+	for {
+		c.gateMu.Lock()
+		d := time.Until(c.pausedUntil)
+		c.gateMu.Unlock()
+		if d <= 0 {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(d):
+			// Re-check: another goroutine may have extended the pause.
+		}
+	}
+}
+
+// setGate extends the shared pause so it ends at least d from now. Concurrent
+// callers only ever push the window later, never earlier.
+func (c *Client) setGate(d time.Duration) {
+	if d <= 0 {
+		return
+	}
+	until := time.Now().Add(d)
+	c.gateMu.Lock()
+	if until.After(c.pausedUntil) {
+		c.pausedUntil = until
+	}
+	c.gateMu.Unlock()
 }
 
 // APIError describes a non-2xx Graph response.
@@ -77,6 +123,13 @@ func (c *Client) do(ctx context.Context, method, url, contentType string, body [
 	var lastErr error
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Respect any tenant-wide throttle pause before doing anything else, so
+		// a throttled tenant idles instead of refreshing tokens and firing
+		// requests that would only be throttled again.
+		if err := c.waitGate(ctx); err != nil {
+			return 0, nil, err
+		}
+
 		token, err := c.auth.Token(ctx)
 		if err != nil {
 			return 0, nil, err
@@ -99,7 +152,7 @@ func (c *Client) do(ctx context.Context, method, url, contentType string, body [
 		resp, err := c.http.Do(req)
 		if err != nil {
 			lastErr = err
-			if sleepBackoff(ctx, attempt, 0) {
+			if attempt < maxRetries && sleepCtx(ctx, backoffDuration(attempt, 0)) {
 				continue
 			}
 			return 0, nil, err
@@ -109,7 +162,7 @@ func (c *Client) do(ctx context.Context, method, url, contentType string, body [
 		resp.Body.Close()
 		if readErr != nil {
 			lastErr = readErr
-			if sleepBackoff(ctx, attempt, 0) {
+			if attempt < maxRetries && sleepCtx(ctx, backoffDuration(attempt, 0)) {
 				continue
 			}
 			return 0, nil, readErr
@@ -118,8 +171,14 @@ func (c *Client) do(ctx context.Context, method, url, contentType string, body [
 		switch resp.StatusCode {
 		case http.StatusTooManyRequests, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
-			log.Debugf("throttled (%d) on %s; retry in %s (attempt %d)", resp.StatusCode, url, retryAfter, attempt+1)
-			if sleepBackoff(ctx, attempt, retryAfter) {
+			wait := backoffDuration(attempt, retryAfter)
+			// Pause the whole tenant, not just this request, so every worker
+			// backs off together and they don't re-trigger the throttle in a
+			// herd when the window ends (jitter in backoffDuration staggers the
+			// resume for the exponential-fallback case).
+			c.setGate(wait)
+			log.Debugf("throttled (%d) on %s; tenant paused %s (attempt %d)", resp.StatusCode, url, wait, attempt+1)
+			if attempt < maxRetries && sleepCtx(ctx, wait) {
 				continue
 			}
 			return resp.StatusCode, data, &APIError{Status: resp.StatusCode, Body: string(data), Method: method, URL: url}
@@ -222,23 +281,32 @@ func parseRetryAfter(v string) time.Duration {
 	return 0
 }
 
-// sleepBackoff waits before a retry. It uses explicit when (from Retry-After)
-// if given, otherwise exponential backoff. Returns false if retries should stop
-// (ctx cancelled or attempts exhausted).
-func sleepBackoff(ctx context.Context, attempt int, when time.Duration) bool {
-	if attempt >= maxRetries {
-		return false
+// backoffDuration is how long to wait before a retry. It honours explicit
+// when (from Retry-After) when given; otherwise it uses capped exponential
+// backoff with jitter so that workers whose waits are not pinned to a common
+// Retry-After do not resume in lockstep.
+func backoffDuration(attempt int, when time.Duration) time.Duration {
+	if when > 0 {
+		return when
 	}
-	if when <= 0 {
-		when = time.Duration(1<<attempt) * time.Second
-		if when > 60*time.Second {
-			when = 60 * time.Second
-		}
+	d := time.Duration(1<<attempt) * time.Second
+	if d > 60*time.Second {
+		d = 60 * time.Second
+	}
+	// Full jitter over [d/2, d]: keeps the mean backoff while spreading resume.
+	return d/2 + time.Duration(rand.Int63n(int64(d/2)+1))
+}
+
+// sleepCtx waits for d or until ctx is cancelled. It returns true if the full
+// wait elapsed, false if the context was cancelled first.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
 	}
 	select {
 	case <-ctx.Done():
 		return false
-	case <-time.After(when):
+	case <-time.After(d):
 		return true
 	}
 }
