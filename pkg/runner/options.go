@@ -17,6 +17,8 @@ type Options struct {
 	Auth struct {
 		ClientID    string
 		Tenant      string
+		Authority   string
+		Scopes      []string
 		SourceCache string
 		DestCache   string
 	}

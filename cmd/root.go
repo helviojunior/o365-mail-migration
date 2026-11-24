@@ -114,8 +114,10 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&opts.Logging.Debug, "debug-log", "D", false, "Enable debug logging")
 	rootCmd.PersistentFlags().BoolVarP(&opts.Logging.Silence, "quiet", "q", false, "Silence (almost all) logging")
 
-	rootCmd.PersistentFlags().StringVar(&opts.Auth.ClientID, "client-id", graph.DefaultClientID, "Azure AD application (client) id used for interactive login")
-	rootCmd.PersistentFlags().StringVar(&opts.Auth.Tenant, "tenant", graph.DefaultTenant, "Tenant to authenticate against (id, domain, 'organizations' or 'common')")
+	rootCmd.PersistentFlags().StringVar(&opts.Auth.ClientID, "client-id", graph.DefaultClientID, "Public client (application) id used for interactive login")
+	rootCmd.PersistentFlags().StringVar(&opts.Auth.Tenant, "tenant", graph.DefaultTenant, "Tenant to authenticate against ('common', 'organizations' or a tenant id/domain)")
+	rootCmd.PersistentFlags().StringVar(&opts.Auth.Authority, "authority", graph.DefaultAuthority, "Entra ID login authority host (without the tenant segment)")
+	rootCmd.PersistentFlags().StringArrayVar(&opts.Auth.Scopes, "scope", graph.DefaultScopes, "Delegated OAuth scope (repeatable); defaults to the Microsoft Graph Mail scopes")
 
 	rootCmd.PersistentFlags().StringVar(&opts.Writer.CtrlDbURI, "state-db-uri", "", "Migration state DB URI (default sqlite at ~/.mailmigrate/state.db)")
 	rootCmd.PersistentFlags().BoolVar(&opts.Writer.DbDebug, "state-db-debug", false, "Enable state DB query debug logging (verbose)")

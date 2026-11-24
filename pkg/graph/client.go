@@ -43,7 +43,32 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	if code, msg, ok := parseGraphError(e.Body); ok {
+		if code != "" {
+			return fmt.Sprintf("graph %d %s: %s", e.Status, code, msg)
+		}
+		return fmt.Sprintf("graph %d: %s", e.Status, msg)
+	}
 	return fmt.Sprintf("graph %s %s -> %d: %s", e.Method, e.URL, e.Status, e.Body)
+}
+
+// parseGraphError extracts code/message from the standard Graph error envelope
+// {"error":{"code":"...","message":"..."}}. ok is false when body is not that
+// shape.
+func parseGraphError(body string) (code, message string, ok bool) {
+	var env struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(body), &env); err != nil {
+		return "", "", false
+	}
+	if env.Error.Code == "" && env.Error.Message == "" {
+		return "", "", false
+	}
+	return env.Error.Code, env.Error.Message, true
 }
 
 // do performs a request with retries on 429/503/504 (honouring Retry-After)

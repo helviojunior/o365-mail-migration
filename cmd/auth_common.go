@@ -20,7 +20,7 @@ import (
 func runDeviceAuth(role, cacheFile string) error {
 	ctx := context.Background()
 
-	auth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, cacheFile)
+	auth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.Authority, opts.Auth.Scopes, cacheFile)
 	if err != nil {
 		return fmt.Errorf("building authenticator: %w", err)
 	}

@@ -79,16 +79,31 @@ To migrate several users, repeat the three steps per user (one mailbox per run).
 
 ### Authentication options
 
-By default it uses the first-party **Microsoft Graph Command Line Tools** public
-client (`14d82eec-204b-4c2f-b7e8-296a70dad67c`), which needs no app registration.
-If a tenant blocks it or requires admin consent for Mail scopes, register your
-own multi-tenant app and pass it:
+By default it uses **Thunderbird's generic public client**
+(`9e5f94bc-e8a4-4e73-b8be-63364c29d753`) against the `common` tenant. Everything
+is overridable:
 
 ```bash
-mailmigrate auth-source --client-id <your-app-id> --tenant contoso.onmicrosoft.com
+mailmigrate auth-source \
+  --client-id 9e5f94bc-e8a4-4e73-b8be-63364c29d753 \
+  --tenant common \
+  --authority https://login.microsoftonline.com \
+  --scope https://graph.microsoft.com/Mail.ReadWrite \
+  --scope https://graph.microsoft.com/MailboxSettings.Read \
+  --scope https://graph.microsoft.com/User.Read
 ```
 
-Delegated scopes requested: `Mail.ReadWrite`, `MailboxSettings.Read`, `User.Read`.
+Default delegated scopes: `Mail.ReadWrite`, `MailboxSettings.Read`, `User.Read`
+(Microsoft **Graph**). Auth failures are parsed and shown with the AADSTS code
+plus a hint.
+
+> **Important — client vs. API:** this tool talks to the Microsoft **Graph**
+> API, so it needs *Graph* scopes. The Thunderbird client is normally registered
+> for *IMAP/POP/SMTP* (`outlook.office.com`) scopes, so requesting Graph scopes
+> with it can fail with a consent error (e.g. `AADSTS65001`) in some tenants. If
+> that happens, register your own multi-tenant app in Entra ID (public client,
+> device-code flow enabled, Graph Mail delegated permissions) and pass it via
+> `--client-id`.
 
 ## Limitations
 

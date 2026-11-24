@@ -49,11 +49,11 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 		defer stop()
 
 		// Source authenticator (read-only side).
-		srcAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.SourceCache)
+		srcAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.Authority, opts.Auth.Scopes, opts.Auth.SourceCache)
 		if err != nil {
 			return err
 		}
-		dstAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.DestCache)
+		dstAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.Authority, opts.Auth.Scopes, opts.Auth.DestCache)
 		if err != nil {
 			return err
 		}
