@@ -80,11 +80,12 @@ To migrate several users, repeat the three steps per user (one mailbox per run).
 
 ### Progress
 
-On an interactive terminal, migration runs **docker-compose style**: several
-folders are copied at once, each with its own live progress bar (count,
-percentage, elapsed and **ETA**) in an area pinned to the bottom of the screen.
-When a folder finishes, a permanent line is printed above the area and the
-remaining bars move up and continue:
+On an interactive terminal, migration runs **docker-compose style**: an area is
+pinned to the bottom of the screen whose first line is an **`Overall`** bar
+(whole-mailbox progress — total messages, percentage, elapsed and ETA, updated
+continuously), followed by one live bar per in-flight folder (count, percentage,
+elapsed and **ETA**). When a folder finishes, a permanent line is printed above
+the area and the remaining bars move up and continue:
 
 - `✓ <Folder>: N messages migrated` when everything copied, or
 - `✗ <Folder>: N migrated, F failed` when some messages failed.

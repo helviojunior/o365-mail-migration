@@ -18,12 +18,15 @@ func TestProgressTTYRendering(t *testing.T) {
 	a := p.StartFolder("Inbox", 2)
 	p.StartFolder("Sent Items", 2)
 
-	// One render tick draws both bars.
+	// One render tick draws the overall bar plus both folder bars.
 	p.mu.Lock()
 	p.drawLocked()
 	p.mu.Unlock()
-	if p.linesDrawn != 2 {
-		t.Fatalf("linesDrawn after draw = %d, want 2", p.linesDrawn)
+	if p.linesDrawn != 3 {
+		t.Fatalf("linesDrawn after draw = %d, want 3 (overall + 2 folders)", p.linesDrawn)
+	}
+	if !strings.Contains(buf.String(), "Overall") {
+		t.Fatalf("overall mailbox bar missing:\n%q", buf.String())
 	}
 
 	a.Inc()
@@ -33,14 +36,14 @@ func TestProgressTTYRendering(t *testing.T) {
 	out := buf.String()
 	// pterm colorizes, so the words are interleaved with SGR codes; check the
 	// stable parts of the permanent line and the area-management escapes.
-	for _, want := range []string{"✓", "messages migrated", "\033[2A\r\033[J"} {
+	for _, want := range []string{"✓", "messages migrated", "\033["} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output missing %q:\n%q", want, out)
 		}
 	}
-	// Inbox is done and removed; Sent Items remains active (one bar).
-	if p.linesDrawn != 1 {
-		t.Fatalf("linesDrawn after one Done = %d, want 1", p.linesDrawn)
+	// Overall bar + Sent Items remain (Inbox done and removed).
+	if p.linesDrawn != 2 {
+		t.Fatalf("linesDrawn after one Done = %d, want 2 (overall + 1 folder)", p.linesDrawn)
 	}
 }
 

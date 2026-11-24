@@ -187,7 +187,8 @@ func completionLine(name string, done, failed int64) string {
 		pterm.Red("✗"), pterm.Cyan(name), pterm.Bold.Sprint(done-failed), pterm.Red(pterm.Bold.Sprint(failed)))
 }
 
-// drawLocked redraws the live area in place (caller holds p.mu).
+// drawLocked redraws the live area in place (caller holds p.mu). The first line
+// is always the overall "Mailbox" bar, followed by one bar per active folder.
 func (p *Progress) drawLocked() {
 	if !p.tty {
 		return
@@ -196,12 +197,45 @@ func (p *Progress) drawLocked() {
 	if p.linesDrawn > 0 {
 		fmt.Fprintf(&b, "\033[%dA\r\033[J", p.linesDrawn) // up, col0, clear to end
 	}
+	b.WriteString(p.overallLine())
+	b.WriteByte('\n')
 	for _, fb := range p.active {
 		b.WriteString(p.barLine(fb))
 		b.WriteByte('\n')
 	}
-	p.linesDrawn = len(p.active)
+	p.linesDrawn = 1 + len(p.active)
 	io.WriteString(p.out, b.String())
+}
+
+// overallLine renders the whole-mailbox progress bar shown above the folders.
+func (p *Progress) overallLine() string {
+	done := atomic.LoadInt64(&p.done)
+	elapsed := time.Since(p.start)
+
+	ratio := 1.0
+	if p.total > 0 {
+		ratio = float64(done) / float64(p.total)
+		if ratio > 1 {
+			ratio = 1
+		}
+	}
+	filled := int(ratio * barWidth)
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := pterm.Green(strings.Repeat("█", filled)) + pterm.Gray(strings.Repeat("░", barWidth-filled))
+	name := padRight("Overall", nameWidth)
+	counts := padLeft(fmt.Sprintf("%d/%d", done, p.total), 11)
+
+	eta := "--"
+	if done > 0 && p.total > done {
+		per := elapsed / time.Duration(done)
+		eta = fmtDuration(per * time.Duration(p.total-done))
+	}
+
+	return fmt.Sprintf("%s %s %s %3.0f%% · %s · ETA %s",
+		pterm.Bold.Sprint(pterm.LightWhite(name)), pterm.Gray(counts), bar, ratio*100,
+		pterm.Gray(fmtDuration(elapsed)), pterm.Gray(eta))
 }
 
 // clearAreaLocked erases the live area (caller holds p.mu).
