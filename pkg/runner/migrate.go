@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/helviojunior/mail_migration/internal/ascii"
 	"github.com/helviojunior/mail_migration/pkg/graph"
 	"github.com/helviojunior/mail_migration/pkg/log"
 	"github.com/helviojunior/mail_migration/pkg/models"
@@ -53,6 +54,7 @@ type Migrator struct {
 	destRootID string
 	dbMu       sync.Mutex
 	stats      Stats
+	progress   *ascii.Progress
 }
 
 // NewMigrator resolves both identities and the destination mailbox root.
@@ -87,6 +89,20 @@ func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 
 	mapBySrcID := map[string]string{} // source folder id -> dest folder id
 
+	// Grand total of messages across selected folders drives the overall
+	// percentage and ETA (not counted for a dry run).
+	var grandTotal int64
+	if !m.opts.Migrate.DryRun {
+		for _, f := range folders {
+			if m.folderSelected(f.Path) {
+				grandTotal += int64(f.TotalItemCount)
+			}
+		}
+	}
+	m.progress = ascii.NewProgress(grandTotal, !m.opts.Logging.Silence && !m.opts.Migrate.DryRun)
+	m.progress.Start()
+	defer m.progress.Finish()
+
 	for _, f := range folders {
 		if ctx.Err() != nil {
 			return m.stats, ctx.Err()
@@ -104,6 +120,7 @@ func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 
 		destID, err := m.ensureDestFolder(ctx, f, mapBySrcID)
 		if err != nil {
+			m.progress.Clear()
 			log.Error("failed to create destination folder", "path", f.Path, "err", err)
 			atomic.AddInt64(&m.stats.Failed, 1)
 			continue
@@ -113,11 +130,15 @@ func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 
 		m.saveFolderMap(f, destID)
 
-		log.Warnf("Folder: %s (%d messages)", f.Path, f.TotalItemCount)
+		m.progress.SetFolder(f.Path, int64(f.TotalItemCount))
+		if !m.progress.Enabled() {
+			log.Warnf("Folder: %s (%d messages)", f.Path, f.TotalItemCount)
+		}
 		if err := m.copyFolderMessages(ctx, f, destID); err != nil {
 			if ctx.Err() != nil {
 				return m.stats, ctx.Err()
 			}
+			m.progress.Clear()
 			log.Error("error copying folder", "path", f.Path, "err", err)
 		}
 	}
@@ -208,6 +229,8 @@ func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder,
 }
 
 func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message) {
+	defer m.progress.Inc() // exactly one tick per message, whatever the outcome
+
 	key := msg.InternetMessageID
 	if key == "" {
 		key = "src:" + msg.ID
@@ -242,6 +265,7 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 		rec.Error = fmt.Sprintf("message %d bytes exceeds --max-size %d MB", len(mime), max)
 		atomic.AddInt64(&m.stats.Skipped, 1)
 		m.saveMsg(&rec)
+		m.progress.Clear()
 		log.Warnf("skip (too large): %s", msg.Subject)
 		return
 	}
@@ -276,6 +300,7 @@ func (m *Migrator) fail(rec *models.MessageMigration, err error) {
 	rec.Error = err.Error()
 	atomic.AddInt64(&m.stats.Failed, 1)
 	m.saveMsg(rec)
+	m.progress.Clear()
 	log.Error("message failed", "subject", rec.Subject, "err", err)
 }
 
@@ -330,6 +355,7 @@ func (m *Migrator) verifyDates(ctx context.Context, destMsgID string, src graph.
 	sentOK := withinTolerance(src.SentDateTime, gotSent)
 	if !recvOK || !sentOK {
 		atomic.AddInt64(&m.stats.DateDrift, 1)
+		m.progress.Clear()
 		log.Warnf("date drift on %q: received src=%s dst=%s | sent src=%s dst=%s",
 			src.Subject, src.ReceivedDateTime, gotRecv, src.SentDateTime, gotSent)
 	}
