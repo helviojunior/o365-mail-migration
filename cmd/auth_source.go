@@ -1,7 +1,7 @@
 package cmd
 
 import (
-	"github.com/helviojunior/mail_migration/internal/ascii"
+	"github.com/helviojunior/o365-mail-migration/internal/ascii"
 	"github.com/spf13/cobra"
 )
 

@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/glebarez/sqlite"
-	"github.com/helviojunior/mail_migration/pkg/models"
+	"github.com/helviojunior/o365-mail-migration/pkg/models"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"

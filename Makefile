@@ -1,7 +1,7 @@
 TARGET=./build
 ARCHS=amd64 386 arm64
 GOOS=windows linux darwin
-PACKAGENAME="github.com/helviojunior/mail_migration"
+PACKAGENAME="github.com/helviojunior/o365-mail-migration"
 BINNAME=o365migrate
 
 ifdef VER

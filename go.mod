@@ -1,4 +1,4 @@
-module github.com/helviojunior/mail_migration
+module github.com/helviojunior/o365-mail-migration
 
 go 1.27.2
 

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/helviojunior/mail_migration/pkg/models"
+	"github.com/helviojunior/o365-mail-migration/pkg/models"
 )
 
 func TestConnectSqliteAndMigrate(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/glamour"
-	"github.com/helviojunior/mail_migration/internal/version"
+	"github.com/helviojunior/o365-mail-migration/internal/version"
 )
 
 // logoArt is the coloured "O365" banner. ANSI SGR escapes are written with a

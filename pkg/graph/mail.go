@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/helviojunior/mail_migration/pkg/log"
+	"github.com/helviojunior/o365-mail-migration/pkg/log"
 )
 
 // Me returns the signed-in user (identity of the cached account).

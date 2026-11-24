@@ -31,10 +31,10 @@ jobs:
           BUILDENV=$(go version | cut -d' ' -f 3,4 | sed 's/ /_/g')
           BUILDTIME=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
           LDFLAGS="-s -w \
-            -X=github.com/helviojunior/mail_migration/internal/version.Version=$VER \
-            -X=github.com/helviojunior/mail_migration/internal/version.GitHash=$GITHASH \
-            -X=github.com/helviojunior/mail_migration/internal/version.GoBuildEnv=$BUILDENV \
-            -X=github.com/helviojunior/mail_migration/internal/version.GoBuildTime=$BUILDTIME"
+            -X=github.com/helviojunior/o365-mail-migration/internal/version.Version=$VER \
+            -X=github.com/helviojunior/o365-mail-migration/internal/version.GitHash=$GITHASH \
+            -X=github.com/helviojunior/o365-mail-migration/internal/version.GoBuildEnv=$BUILDENV \
+            -X=github.com/helviojunior/o365-mail-migration/internal/version.GoBuildTime=$BUILDTIME"
 
           echo "LDFLAGS=$LDFLAGS" >> $GITHUB_OUTPUT
 

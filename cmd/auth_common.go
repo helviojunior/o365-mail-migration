@@ -6,11 +6,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/helviojunior/mail_migration/internal/ascii"
-	"github.com/helviojunior/mail_migration/pkg/database"
-	"github.com/helviojunior/mail_migration/pkg/graph"
-	"github.com/helviojunior/mail_migration/pkg/log"
-	"github.com/helviojunior/mail_migration/pkg/models"
+	"github.com/helviojunior/o365-mail-migration/internal/ascii"
+	"github.com/helviojunior/o365-mail-migration/pkg/database"
+	"github.com/helviojunior/o365-mail-migration/pkg/graph"
+	"github.com/helviojunior/o365-mail-migration/pkg/log"
+	"github.com/helviojunior/o365-mail-migration/pkg/models"
 	"gorm.io/gorm/clause"
 )
 

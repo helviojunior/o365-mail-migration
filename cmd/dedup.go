@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	"github.com/helviojunior/mail_migration/internal/ascii"
-	"github.com/helviojunior/mail_migration/pkg/graph"
-	"github.com/helviojunior/mail_migration/pkg/log"
+	"github.com/helviojunior/o365-mail-migration/internal/ascii"
+	"github.com/helviojunior/o365-mail-migration/pkg/graph"
+	"github.com/helviojunior/o365-mail-migration/pkg/log"
 	"github.com/spf13/cobra"
 )
 

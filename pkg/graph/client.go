@@ -10,7 +10,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/helviojunior/mail_migration/pkg/log"
+	"github.com/helviojunior/o365-mail-migration/pkg/log"
 )
 
 // BaseURL is the Microsoft Graph v1.0 endpoint.
