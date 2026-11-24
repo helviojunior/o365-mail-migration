@@ -37,6 +37,13 @@ type Stats struct {
 	Failed     int64
 	DateDrift  int64 // copies whose received/sent date did not match after fix (verify mode)
 	MetaFailed int64 // copies whose metadata PATCH (read/flags/dates) failed
+
+	// Mailbox settings (final step).
+	SettingsRun bool
+	RulesCopied int64
+	RulesFailed int64
+	AutoReply   string // "applied", "skipped (none)", "failed" or ""
+	Signatures  string // always a "not supported via Graph" note when settings run
 }
 
 // dateTolerance is how far a copied timestamp may differ from the source before
@@ -56,7 +63,8 @@ type Migrator struct {
 	dbMu       sync.Mutex
 	stats      Stats
 	progress   *ascii.Progress
-	sem        chan struct{} // global cap on concurrent message operations
+	sem        chan struct{}     // global cap on concurrent message operations
+	folderMap  map[string]string // source folder id -> dest folder id (for rule remapping)
 }
 
 // folderJob pairs a source folder with its resolved destination folder id.
@@ -135,6 +143,8 @@ func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 		grandTotal += int64(f.TotalItemCount)
 	}
 
+	m.folderMap = mapBySrcID
+
 	// Phase 2: copy messages, several folders at a time.
 	m.progress = ascii.NewProgress(grandTotal, !m.opts.Logging.Silence)
 	m.progress.Start()
@@ -182,6 +192,85 @@ func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 		return m.stats, ctx.Err()
 	}
 	return m.stats, nil
+}
+
+// MigrateSettings copies mailbox settings as a final step: inbox rules (with
+// folder references remapped to the destination), automatic replies, and a note
+// about signatures (which Microsoft Graph cannot migrate). It is called after
+// Run, when the live progress area is no longer active, so its logs are clean.
+func (m *Migrator) MigrateSettings(ctx context.Context) Stats {
+	m.stats.SettingsRun = true
+	log.Warn("Migrating mailbox settings (rules, automatic replies, signatures)...")
+
+	// 1. Inbox rules.
+	if rules, err := m.src.GetInboxRules(ctx); err != nil {
+		log.Error("could not read source inbox rules", "err", err)
+	} else {
+		for _, r := range rules {
+			delete(r, "id")
+			delete(r, "@odata.context")
+			delete(r, "@odata.type")
+			m.remapRuleFolders(r)
+			if err := m.dst.CreateInboxRule(ctx, r); err != nil {
+				m.stats.RulesFailed++
+				log.Warnf("rule %q not created: %v", ruleName(r), err)
+			} else {
+				m.stats.RulesCopied++
+			}
+		}
+		log.Warnf("Inbox rules: %d copied, %d failed", m.stats.RulesCopied, m.stats.RulesFailed)
+	}
+
+	// 2. Automatic replies (out-of-office).
+	if ar, err := m.src.GetAutomaticReplies(ctx); err != nil {
+		log.Warnf("could not read automatic replies: %v", err)
+		m.stats.AutoReply = "failed (read)"
+	} else {
+		status, _ := ar["status"].(string)
+		delete(ar, "@odata.context")
+		if err := m.dst.SetAutomaticReplies(ctx, ar); err != nil {
+			log.Warnf("automatic replies not applied: %v", err)
+			m.stats.AutoReply = "failed"
+		} else {
+			m.stats.AutoReply = fmt.Sprintf("applied (%s)", status)
+			log.Warnf("Automatic replies: applied (status=%s)", status)
+		}
+	}
+
+	// 3. Signatures — no Microsoft Graph API exists for Outlook signatures.
+	m.stats.Signatures = "not supported via Microsoft Graph"
+	log.Warn("Signatures cannot be migrated via Microsoft Graph (no API); set them manually or via Exchange Online PowerShell (Set-MailboxMessageConfiguration)")
+
+	return m.stats
+}
+
+// remapRuleFolders rewrites folder ids in a rule's move/copy actions from source
+// to destination; an action referencing a folder that was not migrated is
+// dropped so the rest of the rule can still be created.
+func (m *Migrator) remapRuleFolders(rule map[string]interface{}) {
+	actions, ok := rule["actions"].(map[string]interface{})
+	if !ok {
+		return
+	}
+	for _, key := range []string{"moveToFolder", "copyToFolder"} {
+		id, ok := actions[key].(string)
+		if !ok {
+			continue
+		}
+		if dest, ok := m.folderMap[id]; ok {
+			actions[key] = dest
+		} else {
+			delete(actions, key)
+			log.Debugf("rule action %q references an unmigrated folder; dropped", key)
+		}
+	}
+}
+
+func ruleName(rule map[string]interface{}) string {
+	if n, ok := rule["displayName"].(string); ok {
+		return n
+	}
+	return "(unnamed)"
 }
 
 // folderSelected applies include/exclude filters (case-insensitive prefix match

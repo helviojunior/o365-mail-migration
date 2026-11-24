@@ -108,6 +108,11 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 			return err
 		}
 
+		// Final step: migrate mailbox settings (rules, automatic replies).
+		if opts.Migrate.Settings && !errors.Is(err, context.Canceled) {
+			stats = mig.MigrateSettings(ctx)
+		}
+
 		summary := fmt.Sprintf(
 			"## Summary\n\n- Folders: **%d**\n- Copied: **%d**\n- Skipped: **%d**\n- Failed: **%d**\n",
 			stats.Folders, stats.Copied, stats.Skipped, stats.Failed)
@@ -116,6 +121,10 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 		}
 		if opts.Migrate.VerifyDates {
 			summary += fmt.Sprintf("- Date drift (received/sent mismatch): **%d**\n", stats.DateDrift)
+		}
+		if stats.SettingsRun {
+			summary += fmt.Sprintf("- Inbox rules: **%d copied, %d failed**\n- Automatic replies: **%s**\n- Signatures: **%s**\n",
+				stats.RulesCopied, stats.RulesFailed, stats.AutoReply, stats.Signatures)
 		}
 		fmt.Println(ascii.Markdown(summary))
 
@@ -147,6 +156,7 @@ func init() {
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy messages already recorded as migrated")
 	migrateCmd.Flags().IntVar(&opts.Migrate.MaxSizeMB, "max-size", 0, "Skip messages larger than this many MB (0 = no limit)")
+	migrateCmd.Flags().BoolVar(&opts.Migrate.Settings, "migrate-settings", true, "As a final step, migrate inbox rules and automatic replies (signatures have no Graph API)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.CheckDestination, "check-destination", true, "Skip messages already present in the destination folder (dedup against the destination, prevents duplicates on re-runs)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.FixDates, "fix-dates", true, "Also force the original received/sent dates via MAPI extended properties (0x0E06/0x0039)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.VerifyDates, "verify-dates", false, "Re-read each copied message and report received/sent date drift (extra API call per message)")

@@ -31,6 +31,30 @@ Built in the same style as [enumdns](https://github.com/helviojunior/enumdns)
      categories — and, with `--fix-dates` (default on), also forces the original
      received/sent timestamps via MAPI extended properties
      (`SystemTime 0x0E06` / `SystemTime 0x0039`) in the same request.
+4. **Final step** (`--migrate-settings`, default on) — migrate mailbox settings:
+   - **Inbox rules** (`/me/mailFolders/inbox/messageRules`), with any
+     move/copy-to-folder actions remapped to the destination folders.
+   - **Automatic replies / out-of-office** (`/me/mailboxSettings`).
+   - **Signatures** are **not** migrated: Microsoft Graph has no API for Outlook
+     (roaming) signatures. The run prints a note; set them manually or via
+     Exchange Online PowerShell (`Set-MailboxMessageConfiguration`).
+
+> Settings migration needs the `MailboxSettings.ReadWrite` scope (now in the
+> defaults). If you authenticated before this was added, re-run `auth-source` /
+> `auth-destination` so the new scope is consented.
+
+### Running several migrations in parallel
+
+By default, tokens and state live in `~/.o365migrate`. Pass **`--local`** (on
+every command) to use `./.o365migrate` under the current directory instead, so
+you can migrate several users at once from separate folders:
+
+```bash
+mkdir alice && cd alice
+o365migrate --local auth-source
+o365migrate --local auth-destination
+o365migrate --local migrate
+```
 
 ### Date preservation
 

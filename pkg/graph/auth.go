@@ -30,7 +30,7 @@ const DefaultAuthority = "https://login.microsoftonline.com"
 // offline_access/openid/profile automatically. Override with --scope.
 var DefaultScopes = []string{
 	"https://graph.microsoft.com/Mail.ReadWrite",
-	"https://graph.microsoft.com/MailboxSettings.Read",
+	"https://graph.microsoft.com/MailboxSettings.ReadWrite",
 	"https://graph.microsoft.com/User.Read",
 }
 

@@ -20,8 +20,9 @@ import (
 const sqlitePrefix = "sqlite:///"
 
 var (
-	opts    = &runner.Options{}
-	baseDir = ""
+	opts           = &runner.Options{}
+	baseDir        = ""
+	localWorkspace = false
 )
 
 var rootCmd = &cobra.Command{
@@ -52,7 +53,19 @@ var rootCmd = &cobra.Command{
 		}
 		opts.Writer.UserPath = usr.HomeDir
 
-		baseDir = filepath.Join(usr.HomeDir, ".o365migrate")
+		// --local keeps the token caches and state DB in a .o365migrate folder
+		// under the current working directory instead of the user's home, so
+		// several migrations (e.g. one per user) can run in parallel from
+		// separate directories without sharing state.
+		if localWorkspace {
+			cwd, err := os.Getwd()
+			if err != nil {
+				return err
+			}
+			baseDir = filepath.Join(cwd, ".o365migrate")
+		} else {
+			baseDir = filepath.Join(usr.HomeDir, ".o365migrate")
+		}
 		if _, err := tools.CreateDir(baseDir); err != nil {
 			return fmt.Errorf("creating state dir %s: %w", baseDir, err)
 		}
@@ -119,6 +132,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&opts.Auth.Authority, "authority", graph.DefaultAuthority, "Entra ID login authority host (without the tenant segment)")
 	rootCmd.PersistentFlags().StringArrayVar(&opts.Auth.Scopes, "scope", graph.DefaultScopes, "Delegated OAuth scope (repeatable); defaults to the Microsoft Graph Mail scopes")
 
+	rootCmd.PersistentFlags().BoolVar(&localWorkspace, "local", false, "Store token caches and state in ./.o365migrate (current directory) instead of ~/.o365migrate, so multiple migrations can run in parallel from separate directories")
 	rootCmd.PersistentFlags().StringVar(&opts.Writer.CtrlDbURI, "state-db-uri", "", "Migration state DB URI (default sqlite at ~/.o365migrate/state.db)")
 	rootCmd.PersistentFlags().BoolVar(&opts.Writer.DbDebug, "state-db-debug", false, "Enable state DB query debug logging (verbose)")
 }
