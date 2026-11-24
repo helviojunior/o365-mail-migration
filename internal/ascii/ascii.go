@@ -42,9 +42,23 @@ func LogoHelp(s string) string {
 	return Logo() + "\n" + s
 }
 
+// mdRenderer is the shared glamour renderer. WithWordWrap(0) disables glamour's
+// hard word-wrap (default 80 cols), which otherwise breaks long inline-code
+// spans — e.g. a GUID UPN like 0cc4f489-…@tenant.onmicrosoft.com — across two
+// lines with an indented continuation. With wrapping off the address stays a
+// single unbroken token; the terminal still soft-wraps only if physically too
+// narrow, never mid-token. Built once; glamour.TermRenderer is reusable.
+var mdRenderer, mdRendererErr = glamour.NewTermRenderer(
+	glamour.WithStandardStyle("dark"),
+	glamour.WithWordWrap(0),
+)
+
 // Markdown renders markdown for the terminal, falling back to the raw text.
 func Markdown(md string) string {
-	out, err := glamour.Render(md, "dark")
+	if mdRendererErr != nil {
+		return md
+	}
+	out, err := mdRenderer.Render(md)
 	if err != nil {
 		return md
 	}
