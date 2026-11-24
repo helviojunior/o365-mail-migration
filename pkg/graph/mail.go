@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+
+	"github.com/helviojunior/mail_migration/pkg/log"
 )
 
 // Me returns the signed-in user (identity of the cached account).
@@ -17,12 +19,24 @@ func (c *Client) Me(ctx context.Context) (*User, error) {
 	return &u, nil
 }
 
-const folderSelect = "id,displayName,parentFolderId,childFolderCount,totalItemCount,wellKnownName"
+// folderSelect lists mailFolder properties valid on the Graph v1.0 endpoint.
+// Note: wellKnownName only exists on the beta endpoint, so it is resolved
+// separately via ResolveWellKnownIDs instead of being $select-ed here.
+const folderSelect = "id,displayName,parentFolderId,childFolderCount,totalItemCount"
+
+// wellKnownFolderNames are the special folders we map directly between tenants.
+// Each can be addressed by name as a folder id (e.g. GET /me/mailFolders/inbox).
+var wellKnownFolderNames = []string{
+	"inbox", "archive", "deleteditems", "junkemail",
+	"sentitems", "drafts", "outbox", "conversationhistory",
+}
 
 // ListFolders returns every mail folder (including hidden ones) with a computed
 // display Path, ordered parents-before-children so a destination tree can be
-// created top-down.
+// created top-down. Well-known folders are annotated via their resolved ids.
 func (c *Client) ListFolders(ctx context.Context) ([]MailFolder, error) {
+	wk := c.ResolveWellKnownIDs(ctx) // best effort; empty map is fine
+
 	var out []MailFolder
 	roots, err := c.pageFolders(ctx, "/me/mailFolders?includeHiddenFolders=true&$top=100&$select="+folderSelect)
 	if err != nil {
@@ -37,7 +51,31 @@ func (c *Client) ListFolders(ctx context.Context) ([]MailFolder, error) {
 			}
 		}
 	}
+
+	for i := range out {
+		if name, ok := wk[out[i].ID]; ok {
+			out[i].WellKnownName = name
+		}
+	}
 	return out, nil
+}
+
+// ResolveWellKnownIDs maps each special folder's real id to its well-known name
+// by addressing it by name. Folders absent from the mailbox are skipped. This
+// replaces the beta-only wellKnownName property on the v1.0 endpoint.
+func (c *Client) ResolveWellKnownIDs(ctx context.Context) map[string]string {
+	out := map[string]string{}
+	for _, name := range wellKnownFolderNames {
+		var f MailFolder
+		if err := c.getJSON(ctx, "/me/mailFolders/"+name+"?$select=id,displayName", &f); err != nil {
+			log.Debugf("well-known folder %q not resolved: %v", name, err)
+			continue
+		}
+		if f.ID != "" {
+			out[f.ID] = name
+		}
+	}
+	return out
 }
 
 func (c *Client) walkChildren(ctx context.Context, parent MailFolder, out *[]MailFolder) error {
