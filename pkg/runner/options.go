@@ -34,5 +34,6 @@ type Options struct {
 		MaxSizeMB         int
 		FixDates          bool // also set original received/sent via MAPI extended props
 		VerifyDates       bool // re-read each copy and report date drift
+		CheckDestination  bool // skip messages already present in the destination folder
 	}
 }

@@ -46,7 +46,17 @@ a test mailbox — it re-reads each copy and reports any drift in the summary.
 
 State is tracked in a SQLite DB (`~/.o365migrate/state.db`), so a run is
 **resumable and idempotent**: already-migrated messages are skipped unless you
-pass `--force`.
+pass `--force`. In addition, before copying a folder the tool pre-scans the
+**destination** for messages already there (by `internetMessageId`) and skips
+them — so re-running (or resuming an interrupted run) does **not** create
+duplicates, even if the local state DB is lost. Disable with
+`--check-destination=false` for maximum speed on a known-empty destination.
+
+Imported messages are marked **read and not drafts** (MIME import would
+otherwise leave them as unread drafts) via the `PR_MESSAGE_FLAGS` MAPI property;
+items from the source Drafts folder stay drafts. If the destination tenant
+rejects these metadata PATCHes, the count is shown as "Metadata PATCH failures"
+in the summary.
 
 ## Install / build
 

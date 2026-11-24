@@ -31,11 +31,12 @@ var wellKnownMap = map[string]bool{
 
 // Stats collects migration counters.
 type Stats struct {
-	Folders   int64
-	Copied    int64
-	Skipped   int64
-	Failed    int64
-	DateDrift int64 // copies whose received/sent date did not match after fix (verify mode)
+	Folders    int64
+	Copied     int64
+	Skipped    int64
+	Failed     int64
+	DateDrift  int64 // copies whose received/sent date did not match after fix (verify mode)
+	MetaFailed int64 // copies whose metadata PATCH (read/flags/dates) failed
 }
 
 // dateTolerance is how far a copied timestamp may differ from the source before
@@ -241,8 +242,20 @@ func (m *Migrator) ensureDestFolder(ctx context.Context, src graph.MailFolder, m
 // message copy is gated by the migrator's global semaphore so total concurrency
 // stays bounded even with several folders in flight.
 func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder, destID string, bar *ascii.FolderBar) error {
-	var wg sync.WaitGroup
+	// Pre-scan the destination folder so messages already there (from a prior,
+	// possibly interrupted run) are not imported again. This dedups against the
+	// real destination, independent of the local state DB.
+	var existing map[string]bool
+	if m.opts.Migrate.CheckDestination && !m.opts.Migrate.Force {
+		if ids, err := m.dst.ListInternetMessageIDs(ctx, destID); err != nil {
+			log.Debugf("destination pre-scan failed for %s: %v", src.Path, err)
+		} else {
+			existing = ids
+		}
+	}
+	isDraft := strings.EqualFold(src.WellKnownName, "drafts")
 
+	var wg sync.WaitGroup
 	listErr := m.src.ListMessages(ctx, src.ID, func(msg graph.Message) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -257,7 +270,7 @@ func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder,
 		go func(msg graph.Message) {
 			defer wg.Done()
 			defer func() { <-m.sem }()
-			m.copyOne(ctx, src.Path, destID, msg, bar)
+			m.copyOne(ctx, src.Path, destID, msg, bar, existing, isDraft)
 		}(msg)
 		return nil
 	})
@@ -266,7 +279,7 @@ func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder,
 	return listErr
 }
 
-func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message, bar *ascii.FolderBar) {
+func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message, bar *ascii.FolderBar, existing map[string]bool, isDraft bool) {
 	defer bar.Inc() // exactly one tick per message, whatever the outcome
 
 	key := msg.InternetMessageID
@@ -278,6 +291,18 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 	if !m.opts.Migrate.Force && m.alreadyDone(dedupKey) {
 		atomic.AddInt64(&m.stats.Skipped, 1)
 		log.Debugf("skip (already migrated): %s", msg.Subject)
+		return
+	}
+
+	// Already present in the destination folder -> skip and backfill state.
+	if existing != nil && msg.InternetMessageID != "" && existing[msg.InternetMessageID] {
+		atomic.AddInt64(&m.stats.Skipped, 1)
+		m.saveMsg(&models.MessageMigration{
+			DedupKey: dedupKey, SourceMsgID: msg.ID, InternetMsgID: msg.InternetMessageID,
+			FolderPath: folderPath, Subject: truncate(msg.Subject, 500),
+			Status: "done", MigratedAt: time.Now(),
+		})
+		log.Debugf("skip (already in destination): %s", msg.Subject)
 		return
 	}
 
@@ -320,8 +345,11 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 	// enabled — the original received/sent timestamps via MAPI extended
 	// properties). A failure here is logged but the message still counts as
 	// migrated.
-	if err := m.dst.PatchMessageMeta(ctx, newID, msg, m.opts.Migrate.FixDates); err != nil {
-		log.Debugf("metadata patch failed for %q: %v", msg.Subject, err)
+	if err := m.dst.PatchMessageMeta(ctx, newID, msg, m.opts.Migrate.FixDates, isDraft); err != nil {
+		atomic.AddInt64(&m.stats.MetaFailed, 1)
+		if !m.progress.SuppressLogs() {
+			log.Warnf("metadata patch failed for %q: %v", msg.Subject, err)
+		}
 	}
 
 	if m.opts.Migrate.VerifyDates {

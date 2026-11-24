@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/helviojunior/mail_migration/pkg/log"
@@ -155,19 +156,33 @@ func (c *Client) ImportMIME(ctx context.Context, destFolderID string, mime []byt
 }
 
 // PatchMessageMeta restores metadata that MIME import does not carry: read
-// state, follow-up flag and categories. When fixDates is true, it also sets the
+// state, follow-up flag, categories and the message flags (so an imported
+// message is not left as a draft). When fixDates is true, it also sets the
 // original received/sent timestamps via MAPI extended properties (best effort:
 // some tenants ignore writing these on an existing message — use VerifyDates to
-// detect that).
-func (c *Client) PatchMessageMeta(ctx context.Context, msgID string, m Message, fixDates bool) error {
-	body := buildPatchBody(m, fixDates)
+// detect that). isDraft keeps genuine Drafts-folder items marked as drafts.
+func (c *Client) PatchMessageMeta(ctx context.Context, msgID string, m Message, fixDates, isDraft bool) error {
+	body := buildPatchBody(m, fixDates, isDraft)
 	return c.patchJSON(ctx, fmt.Sprintf("/me/messages/%s", url.PathEscape(msgID)), body)
 }
 
 // buildPatchBody assembles the PATCH payload. It is a pure function so the
 // extended-property wiring can be unit-tested without a live mailbox.
-func buildPatchBody(m Message, fixDates bool) patchBody {
+func buildPatchBody(m Message, fixDates, isDraft bool) patchBody {
 	body := patchBody{IsRead: m.IsRead, Flag: m.Flag, Categories: m.Categories}
+
+	// PR_MESSAGE_FLAGS: mark read and, unless this is a real draft, clear the
+	// draft (unsent) flag that MIME import leaves set.
+	flags := 0
+	if m.IsRead {
+		flags |= msgFlagRead
+	}
+	if isDraft {
+		flags |= msgFlagUnsent
+	}
+	body.SingleValueExtendedProperties = append(body.SingleValueExtendedProperties,
+		singleValueExtendedProperty{ID: propMessageFlags, Value: strconv.Itoa(flags)})
+
 	if fixDates {
 		if m.SentDateTime != "" {
 			body.SingleValueExtendedProperties = append(body.SingleValueExtendedProperties,
@@ -179,6 +194,27 @@ func buildPatchBody(m Message, fixDates bool) patchBody {
 		}
 	}
 	return body
+}
+
+// ListInternetMessageIDs returns the set of internetMessageId values already
+// present in a destination folder, for idempotent de-duplication across runs
+// (independent of the local state DB).
+func (c *Client) ListInternetMessageIDs(ctx context.Context, folderID string) (map[string]bool, error) {
+	ids := map[string]bool{}
+	next := fmt.Sprintf("/me/mailFolders/%s/messages?$top=100&$select=internetMessageId", url.PathEscape(folderID))
+	for next != "" {
+		var page odataList[Message]
+		if err := c.getJSON(ctx, next, &page); err != nil {
+			return nil, err
+		}
+		for _, m := range page.Value {
+			if m.InternetMessageID != "" {
+				ids[m.InternetMessageID] = true
+			}
+		}
+		next = page.NextLink
+	}
+	return ids, nil
 }
 
 // GetMessageDates reads back the received/sent timestamps of a message (used to

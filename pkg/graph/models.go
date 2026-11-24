@@ -47,6 +47,12 @@ type Message struct {
 const (
 	propClientSubmitTime    = "SystemTime 0x0039"
 	propMessageDeliveryTime = "SystemTime 0x0E06"
+	// PR_MESSAGE_FLAGS controls read/draft state. Setting it clears the draft
+	// (MSGFLAG_UNSENT) flag that MIME import otherwise leaves set.
+	propMessageFlags = "Integer 0x0E07"
+
+	msgFlagRead   = 0x01 // MSGFLAG_READ
+	msgFlagUnsent = 0x08 // MSGFLAG_UNSENT (message is a draft)
 )
 
 // singleValueExtendedProperty is one entry of a message's
