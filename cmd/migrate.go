@@ -91,6 +91,9 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 			}
 		}
 
+		// Blank line between the confirmation prompt and the progress output.
+		fmt.Println()
+
 		stats, err := mig.Run(ctx)
 		if err != nil && !errors.Is(err, context.Canceled) {
 			return err
