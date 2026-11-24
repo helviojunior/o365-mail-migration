@@ -22,8 +22,8 @@ func TestProgressTTYRendering(t *testing.T) {
 	p.mu.Lock()
 	p.drawLocked()
 	p.mu.Unlock()
-	if p.linesDrawn != 3 {
-		t.Fatalf("linesDrawn after draw = %d, want 3 (overall + 2 folders)", p.linesDrawn)
+	if p.linesDrawn != 4 {
+		t.Fatalf("linesDrawn after draw = %d, want 4 (spacer + overall + 2 folders)", p.linesDrawn)
 	}
 	if !strings.Contains(buf.String(), "Overall") {
 		t.Fatalf("overall mailbox bar missing:\n%q", buf.String())
@@ -41,9 +41,9 @@ func TestProgressTTYRendering(t *testing.T) {
 			t.Fatalf("output missing %q:\n%q", want, out)
 		}
 	}
-	// Overall bar + Sent Items remain (Inbox done and removed).
-	if p.linesDrawn != 2 {
-		t.Fatalf("linesDrawn after one Done = %d, want 2 (overall + 1 folder)", p.linesDrawn)
+	// Spacer + overall bar + Sent Items remain (Inbox done and removed).
+	if p.linesDrawn != 3 {
+		t.Fatalf("linesDrawn after one Done = %d, want 3 (spacer + overall + 1 folder)", p.linesDrawn)
 	}
 }
 

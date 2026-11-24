@@ -197,13 +197,14 @@ func (p *Progress) drawLocked() {
 	if p.linesDrawn > 0 {
 		fmt.Fprintf(&b, "\033[%dA\r\033[J", p.linesDrawn) // up, col0, clear to end
 	}
+	b.WriteByte('\n') // blank spacer line above the bars
 	b.WriteString(p.overallLine())
 	b.WriteByte('\n')
 	for _, fb := range p.active {
 		b.WriteString(p.barLine(fb))
 		b.WriteByte('\n')
 	}
-	p.linesDrawn = 1 + len(p.active)
+	p.linesDrawn = 2 + len(p.active) // spacer + overall + folders
 	io.WriteString(p.out, b.String())
 }
 
