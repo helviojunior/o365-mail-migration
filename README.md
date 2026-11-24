@@ -88,6 +88,18 @@ o365migrate migrate --exclude-folder "Junk Email"
 
 To migrate several users, repeat the three steps per user (one mailbox per run).
 
+### Cleaning up duplicates
+
+If an older run (before destination de-duplication) left duplicates, remove them
+with `dedup` — it deletes messages that repeat **within the same folder** (same
+`internetMessageId`), keeping one copy:
+
+```bash
+o365migrate dedup --dry-run          # report duplicates per folder
+o365migrate dedup                    # delete them (asks to confirm)
+o365migrate dedup --account source   # clean the source mailbox instead
+```
+
 ### Progress
 
 On an interactive terminal, migration runs **docker-compose style**: an area is

@@ -188,6 +188,12 @@ func (c *Client) patchJSON(ctx context.Context, url string, in interface{}) erro
 	return err
 }
 
+// deleteURL issues a DELETE against path (absolute or relative to BaseURL).
+func (c *Client) deleteURL(ctx context.Context, url string) error {
+	_, _, err := c.do(ctx, http.MethodDelete, c.abs(url), "", nil)
+	return err
+}
+
 // jsonUnmarshal is a thin wrapper so other files in the package need not import
 // encoding/json directly.
 func jsonUnmarshal(data []byte, out interface{}) error { return json.Unmarshal(data, out) }

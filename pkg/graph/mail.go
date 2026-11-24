@@ -260,6 +260,12 @@ func (c *Client) FindChildByName(ctx context.Context, parentID, name string) (Ma
 	return MailFolder{}, false, nil
 }
 
+// DeleteMessage deletes a message (moves it to Deleted Items / Recoverable
+// Items, like any Graph delete).
+func (c *Client) DeleteMessage(ctx context.Context, msgID string) error {
+	return c.deleteURL(ctx, "/me/messages/"+url.PathEscape(msgID))
+}
+
 // MailboxRoot returns the id of the msgfolderroot (top of the mailbox tree), so
 // top-level source folders can be recreated under it in the destination.
 func (c *Client) MailboxRoot(ctx context.Context) (string, error) {
