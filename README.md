@@ -81,14 +81,16 @@ To migrate several users, repeat the three steps per user (one mailbox per run).
 ### Progress
 
 On an interactive terminal, migration runs **docker-compose style**: several
-folders are copied at once and each in-flight folder gets its own live progress
-bar (via [`pterm`](https://github.com/pterm/pterm)) showing its count,
-percentage and elapsed time. A folder's bar leaves the screen when it finishes.
-How many folders run at once is `--folder-concurrency` (default 4); the total
-number of concurrent message copies across all folders is capped by `--threads`
-(default 4). In this mode per-message errors are not printed live (they would
-corrupt the bars) — they are recorded in the state DB and counted in the final
-summary.
+folders are copied at once, each with its own live progress bar (count,
+percentage, elapsed) in an area pinned to the bottom of the screen. When a
+folder finishes, a permanent `✓ <Folder>: N messages migrated` line is printed
+above the area and the remaining bars move up and continue; the overall totals
+are shown in the summary at the end. How many folders run at once is
+`--folder-concurrency` (default 4); the total number of concurrent message
+copies across all folders is capped by `--threads` (default 4). In this mode
+per-message errors are not printed live (they would corrupt the area) — they are
+recorded in the state DB and counted in the final summary.
+(Bars are coloured with [`pterm`](https://github.com/pterm/pterm).)
 
 When the output is **not** a TTY (piped, redirected or run under CI/cron), it
 instead logs a plain `[status] …` snapshot every 60 seconds. Both are suppressed

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -12,36 +13,42 @@ import (
 	"golang.org/x/term"
 )
 
-const nonTTYInterval = 60 * time.Second
+const (
+	ttyInterval    = 150 * time.Millisecond
+	nonTTYInterval = 60 * time.Second
+	barWidth       = 24
+	nameWidth      = 20
+)
 
-// Progress reports migration progress. On a TTY it renders one live pterm
-// progress bar per in-flight folder (docker-compose style: a bar appears when a
-// folder starts and leaves the screen when it completes). When the output is
-// not a TTY it logs a plain "[status] ..." snapshot every 60s. When disabled
-// (quiet mode or dry-run) every method is a no-op.
+// Progress reports migration progress. On a TTY it keeps a live area at the
+// bottom of the screen with one bar per in-flight folder; when a folder
+// finishes it prints a permanent "✓ Name: N messages migrated" line above the
+// area (docker-compose style) and the remaining bars move up below it. When the
+// output is not a TTY it logs a plain "[status] ..." snapshot every 60s. When
+// disabled (quiet or dry-run) every method is a no-op.
 type Progress struct {
 	// 64-bit counters first for alignment on 32-bit platforms.
-	done   int64
-	active int64
+	done int64
 
 	enabled bool
 	tty     bool
 	total   int64
 	start   time.Time
+	out     io.Writer
 
-	out   io.Writer
-	multi *pterm.MultiPrinter
+	mu         sync.Mutex
+	active     []*FolderBar
+	linesDrawn int
 
 	stopCh chan struct{}
 	doneCh chan struct{}
-	mu     sync.Mutex
 }
 
 // NewProgress creates a reporter for a run of total messages. enabled is
 // typically "not quiet and not a dry-run"; TTY vs non-TTY is detected here.
 func NewProgress(total int64, enabled bool) *Progress {
 	return &Progress{
-		out:     os.Stderr,
+		out:     os.Stdout,
 		enabled: enabled,
 		tty:     term.IsTerminal(int(os.Stdout.Fd())),
 		total:   total,
@@ -52,7 +59,7 @@ func NewProgress(total int64, enabled bool) *Progress {
 func (p *Progress) Enabled() bool { return p != nil && p.enabled }
 
 // SuppressLogs reports whether live logging must be withheld to avoid
-// corrupting the pterm live area (true only in TTY mode).
+// corrupting the live area (true only in TTY mode).
 func (p *Progress) SuppressLogs() bool { return p.Enabled() && p.tty }
 
 // Start begins rendering.
@@ -61,17 +68,17 @@ func (p *Progress) Start() {
 		return
 	}
 	p.start = time.Now()
-	if p.tty {
-		m := pterm.DefaultMultiPrinter
-		p.multi = &m
-		p.multi.Start()
-		return
-	}
-	// Non-TTY: periodic textual snapshots.
 	p.stopCh = make(chan struct{})
 	p.doneCh = make(chan struct{})
+
+	interval := nonTTYInterval
+	if p.tty {
+		interval = ttyInterval
+		io.WriteString(p.out, "\033[?25l") // hide cursor
+	}
+
 	go func() {
-		t := time.NewTicker(nonTTYInterval)
+		t := time.NewTicker(interval)
 		defer t.Stop()
 		defer close(p.doneCh)
 		for {
@@ -79,7 +86,13 @@ func (p *Progress) Start() {
 			case <-p.stopCh:
 				return
 			case <-t.C:
-				p.snapshot()
+				if p.tty {
+					p.mu.Lock()
+					p.drawLocked()
+					p.mu.Unlock()
+				} else {
+					p.snapshot()
+				}
 			}
 		}
 	}()
@@ -90,53 +103,37 @@ func (p *Progress) Finish() {
 	if !p.Enabled() {
 		return
 	}
-	if p.tty {
-		if p.multi != nil {
-			p.multi.Stop()
-		}
-		return
-	}
 	close(p.stopCh)
 	<-p.doneCh
+
+	if p.tty {
+		p.mu.Lock()
+		p.clearAreaLocked()
+		p.mu.Unlock()
+		io.WriteString(p.out, "\033[?25h") // show cursor
+		return
+	}
 	p.snapshot() // final 100% line
 }
 
 // FolderBar is a per-folder progress handle.
 type FolderBar struct {
 	p     *Progress
-	pb    *pterm.ProgressbarPrinter
-	mu    sync.Mutex
+	name  string
 	total int
-	done  int
+	done  int64
+	start time.Time
 }
 
-// StartFolder begins tracking a folder of total messages. A TTY gets a live
-// bar; empty folders get no bar.
+// StartFolder begins tracking a folder of total messages.
 func (p *Progress) StartFolder(name string, total int) *FolderBar {
+	fb := &FolderBar{p: p, name: name, total: total, start: time.Now()}
 	if !p.Enabled() {
-		return &FolderBar{p: p, total: total}
+		return fb
 	}
-	atomic.AddInt64(&p.active, 1)
-
-	fb := &FolderBar{p: p, total: total}
-	if p.tty && total > 0 {
-		// Serialize pterm writer/bar creation: MultiPrinter.NewWriter appends to
-		// a shared slice and folders start concurrently.
-		p.mu.Lock()
-		bar, err := pterm.DefaultProgressbar.
-			WithTotal(total).
-			WithWriter(p.multi.NewWriter()).
-			WithRemoveWhenDone(true).
-			WithTitle(trimMiddle(name, 32)).
-			WithShowCount(true).
-			WithShowPercentage(true).
-			WithShowElapsedTime(true).
-			Start()
-		p.mu.Unlock()
-		if err == nil {
-			fb.pb = bar
-		}
-	}
+	p.mu.Lock()
+	p.active = append(p.active, fb)
+	p.mu.Unlock()
 	return fb
 }
 
@@ -145,37 +142,94 @@ func (fb *FolderBar) Inc() {
 	if !fb.p.Enabled() {
 		return
 	}
+	atomic.AddInt64(&fb.done, 1)
 	atomic.AddInt64(&fb.p.done, 1)
+}
 
-	fb.mu.Lock()
-	defer fb.mu.Unlock()
-	fb.done++
-	if fb.pb != nil && fb.done <= fb.total {
-		fb.pb.Increment()
+// Done completes the folder: prints a permanent summary line (TTY) and removes
+// the bar from the live area.
+func (fb *FolderBar) Done() {
+	p := fb.p
+	if !p.Enabled() {
+		return
+	}
+	done := atomic.LoadInt64(&fb.done)
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.removeActiveLocked(fb)
+
+	if p.tty {
+		p.clearAreaLocked()
+		line := fmt.Sprintf("%s %s: %s messages migrated",
+			pterm.Green("✓"), pterm.Cyan(fb.name), pterm.Bold.Sprint(done))
+		io.WriteString(p.out, line+"\n")
+		p.drawLocked()
 	}
 }
 
-// Done completes the folder: fills the bar and removes it from the screen.
-func (fb *FolderBar) Done() {
-	if !fb.p.Enabled() {
+// drawLocked redraws the live area in place (caller holds p.mu).
+func (p *Progress) drawLocked() {
+	if !p.tty {
 		return
 	}
-	atomic.AddInt64(&fb.p.active, -1)
-
-	fb.mu.Lock()
-	defer fb.mu.Unlock()
-	if fb.pb != nil {
-		if rem := fb.total - fb.done; rem > 0 {
-			fb.pb.Add(rem)
-		}
-		fb.pb.Stop() //nolint:errcheck // idempotent; nothing actionable on error
-		fb.pb = nil
+	var b strings.Builder
+	if p.linesDrawn > 0 {
+		fmt.Fprintf(&b, "\033[%dA\r\033[J", p.linesDrawn) // up, col0, clear to end
 	}
+	for _, fb := range p.active {
+		b.WriteString(p.barLine(fb))
+		b.WriteByte('\n')
+	}
+	p.linesDrawn = len(p.active)
+	io.WriteString(p.out, b.String())
+}
+
+// clearAreaLocked erases the live area (caller holds p.mu).
+func (p *Progress) clearAreaLocked() {
+	if p.linesDrawn > 0 {
+		fmt.Fprintf(p.out, "\033[%dA\r\033[J", p.linesDrawn)
+		p.linesDrawn = 0
+	}
+}
+
+func (p *Progress) removeActiveLocked(fb *FolderBar) {
+	for i, x := range p.active {
+		if x == fb {
+			p.active = append(p.active[:i], p.active[i+1:]...)
+			return
+		}
+	}
+}
+
+// barLine renders one folder's progress line.
+func (p *Progress) barLine(fb *FolderBar) string {
+	done := atomic.LoadInt64(&fb.done)
+	ratio := 1.0
+	if fb.total > 0 {
+		ratio = float64(done) / float64(fb.total)
+		if ratio > 1 {
+			ratio = 1
+		}
+	}
+	filled := int(ratio * barWidth)
+	if filled > barWidth {
+		filled = barWidth
+	}
+	bar := pterm.Cyan(strings.Repeat("█", filled)) + pterm.Gray(strings.Repeat("░", barWidth-filled))
+	name := padRight(trimMiddle(fb.name, nameWidth), nameWidth)
+	counts := padLeft(fmt.Sprintf("%d/%d", done, fb.total), 11)
+
+	return fmt.Sprintf("%s %s %s %3.0f%% · %s",
+		pterm.Cyan(name), pterm.Gray(counts), bar, ratio*100, pterm.Gray(fmtDuration(time.Since(fb.start))))
 }
 
 func (p *Progress) snapshot() {
+	p.mu.Lock()
+	active := len(p.active)
+	p.mu.Unlock()
+
 	done := atomic.LoadInt64(&p.done)
-	active := atomic.LoadInt64(&p.active)
 	elapsed := time.Since(p.start)
 
 	pct := 0.0
@@ -192,12 +246,24 @@ func (p *Progress) snapshot() {
 		eta = fmtDuration(per * time.Duration(p.total-done))
 	}
 
-	line := fmt.Sprintf("[status] %5.1f%% | %d/%d msgs | %d folders active | %s elapsed | ETA %s\n",
+	fmt.Fprintf(p.out, "[status] %5.1f%% | %d/%d msgs | %d folders active | %s elapsed | ETA %s\n",
 		pct, done, p.total, active, fmtDuration(elapsed), eta)
+}
 
-	p.mu.Lock()
-	io.WriteString(p.out, line)
-	p.mu.Unlock()
+func padRight(s string, n int) string {
+	r := []rune(s)
+	if len(r) >= n {
+		return s
+	}
+	return s + strings.Repeat(" ", n-len(r))
+}
+
+func padLeft(s string, n int) string {
+	r := []rune(s)
+	if len(r) >= n {
+		return s
+	}
+	return strings.Repeat(" ", n-len(r)) + s
 }
 
 // trimMiddle shortens s to max runes, keeping head and tail with an ellipsis.

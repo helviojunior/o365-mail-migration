@@ -1,10 +1,48 @@
 package ascii
 
 import (
+	"bytes"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+// TestProgressTTYRendering drives the live-area logic with TTY mode forced and
+// a buffer as output, so the ANSI area management is exercised without a real
+// terminal.
+func TestProgressTTYRendering(t *testing.T) {
+	var buf bytes.Buffer
+	p := &Progress{out: &buf, enabled: true, tty: true, total: 4}
+
+	a := p.StartFolder("Inbox", 2)
+	p.StartFolder("Sent Items", 2)
+
+	// One render tick draws both bars.
+	p.mu.Lock()
+	p.drawLocked()
+	p.mu.Unlock()
+	if p.linesDrawn != 2 {
+		t.Fatalf("linesDrawn after draw = %d, want 2", p.linesDrawn)
+	}
+
+	a.Inc()
+	a.Inc()
+	a.Done() // prints the permanent line and redraws remaining bars
+
+	out := buf.String()
+	// pterm colorizes, so the words are interleaved with SGR codes; check the
+	// stable parts of the permanent line and the area-management escapes.
+	for _, want := range []string{"✓", "messages migrated", "\033[2A\r\033[J"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%q", want, out)
+		}
+	}
+	// Inbox is done and removed; Sent Items remains active (one bar).
+	if p.linesDrawn != 1 {
+		t.Fatalf("linesDrawn after one Done = %d, want 1", p.linesDrawn)
+	}
+}
 
 func TestFmtDuration(t *testing.T) {
 	cases := map[time.Duration]string{
@@ -43,8 +81,11 @@ func TestProgressCounters(t *testing.T) {
 	}
 
 	bar := p.StartFolder("Inbox", 5)
-	if got := atomic.LoadInt64(&p.active); got != 1 {
-		t.Fatalf("active = %d, want 1", got)
+	p.mu.Lock()
+	n := len(p.active)
+	p.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("active = %d, want 1", n)
 	}
 
 	bar.Inc()
@@ -55,8 +96,11 @@ func TestProgressCounters(t *testing.T) {
 	}
 
 	bar.Done()
-	if got := atomic.LoadInt64(&p.active); got != 0 {
-		t.Fatalf("active after Done = %d, want 0", got)
+	p.mu.Lock()
+	n = len(p.active)
+	p.mu.Unlock()
+	if n != 0 {
+		t.Fatalf("active after Done = %d, want 0", n)
 	}
 }
 
