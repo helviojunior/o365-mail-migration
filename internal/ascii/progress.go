@@ -118,11 +118,12 @@ func (p *Progress) Finish() {
 
 // FolderBar is a per-folder progress handle.
 type FolderBar struct {
-	p     *Progress
-	name  string
-	total int
-	done  int64
-	start time.Time
+	p      *Progress
+	name   string
+	total  int
+	done   int64
+	failed int64
+	start  time.Time
 }
 
 // StartFolder begins tracking a folder of total messages.
@@ -146,6 +147,14 @@ func (fb *FolderBar) Inc() {
 	atomic.AddInt64(&fb.p.done, 1)
 }
 
+// Fail records that one message in this folder failed to migrate.
+func (fb *FolderBar) Fail() {
+	if !fb.p.Enabled() {
+		return
+	}
+	atomic.AddInt64(&fb.failed, 1)
+}
+
 // Done completes the folder: prints a permanent summary line (TTY) and removes
 // the bar from the live area.
 func (fb *FolderBar) Done() {
@@ -155,17 +164,27 @@ func (fb *FolderBar) Done() {
 	}
 	done := atomic.LoadInt64(&fb.done)
 
+	failed := atomic.LoadInt64(&fb.failed)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.removeActiveLocked(fb)
 
 	if p.tty {
 		p.clearAreaLocked()
-		line := fmt.Sprintf("%s %s: %s messages migrated",
-			pterm.Green("✓"), pterm.Cyan(fb.name), pterm.Bold.Sprint(done))
-		io.WriteString(p.out, line+"\n")
+		io.WriteString(p.out, completionLine(fb.name, done, failed)+"\n")
 		p.drawLocked()
 	}
+}
+
+// completionLine formats the permanent per-folder result line.
+func completionLine(name string, done, failed int64) string {
+	if failed == 0 {
+		return fmt.Sprintf("%s %s: %s messages migrated",
+			pterm.Green("✓"), pterm.Cyan(name), pterm.Bold.Sprint(done))
+	}
+	return fmt.Sprintf("%s %s: %s migrated, %s failed",
+		pterm.Red("✗"), pterm.Cyan(name), pterm.Bold.Sprint(done-failed), pterm.Red(pterm.Bold.Sprint(failed)))
 }
 
 // drawLocked redraws the live area in place (caller holds p.mu).
@@ -202,9 +221,12 @@ func (p *Progress) removeActiveLocked(fb *FolderBar) {
 	}
 }
 
-// barLine renders one folder's progress line.
+// barLine renders one folder's progress line, including an estimated time to
+// completion (ETA) derived from the folder's own throughput so far.
 func (p *Progress) barLine(fb *FolderBar) string {
 	done := atomic.LoadInt64(&fb.done)
+	elapsed := time.Since(fb.start)
+
 	ratio := 1.0
 	if fb.total > 0 {
 		ratio = float64(done) / float64(fb.total)
@@ -220,8 +242,15 @@ func (p *Progress) barLine(fb *FolderBar) string {
 	name := padRight(trimMiddle(fb.name, nameWidth), nameWidth)
 	counts := padLeft(fmt.Sprintf("%d/%d", done, fb.total), 11)
 
-	return fmt.Sprintf("%s %s %s %3.0f%% · %s",
-		pterm.Cyan(name), pterm.Gray(counts), bar, ratio*100, pterm.Gray(fmtDuration(time.Since(fb.start))))
+	eta := "--"
+	if done > 0 && int64(fb.total) > done {
+		per := elapsed / time.Duration(done)
+		eta = fmtDuration(per * time.Duration(int64(fb.total)-done))
+	}
+
+	return fmt.Sprintf("%s %s %s %3.0f%% · %s · ETA %s",
+		pterm.Cyan(name), pterm.Gray(counts), bar, ratio*100,
+		pterm.Gray(fmtDuration(elapsed)), pterm.Gray(eta))
 }
 
 func (p *Progress) snapshot() {

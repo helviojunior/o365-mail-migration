@@ -293,7 +293,7 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 
 	mime, err := m.src.GetMIME(ctx, msg.ID)
 	if err != nil {
-		m.fail(&rec, fmt.Errorf("get MIME: %w", err))
+		m.fail(bar, &rec, fmt.Errorf("get MIME: %w", err))
 		return
 	}
 	rec.SizeBytes = int64(len(mime))
@@ -311,7 +311,7 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 
 	newID, err := m.dst.ImportMIME(ctx, destID, mime)
 	if err != nil {
-		m.fail(&rec, fmt.Errorf("import MIME: %w", err))
+		m.fail(bar, &rec, fmt.Errorf("import MIME: %w", err))
 		return
 	}
 	rec.DestMsgID = newID
@@ -334,10 +334,11 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 	m.saveMsg(&rec)
 }
 
-func (m *Migrator) fail(rec *models.MessageMigration, err error) {
+func (m *Migrator) fail(bar *ascii.FolderBar, rec *models.MessageMigration, err error) {
 	rec.Status = "failed"
 	rec.Error = err.Error()
 	atomic.AddInt64(&m.stats.Failed, 1)
+	bar.Fail()
 	m.saveMsg(rec)
 	if !m.progress.SuppressLogs() {
 		log.Error("message failed", "subject", rec.Subject, "err", err)

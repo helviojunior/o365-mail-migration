@@ -82,10 +82,15 @@ To migrate several users, repeat the three steps per user (one mailbox per run).
 
 On an interactive terminal, migration runs **docker-compose style**: several
 folders are copied at once, each with its own live progress bar (count,
-percentage, elapsed) in an area pinned to the bottom of the screen. When a
-folder finishes, a permanent `✓ <Folder>: N messages migrated` line is printed
-above the area and the remaining bars move up and continue; the overall totals
-are shown in the summary at the end. How many folders run at once is
+percentage, elapsed and **ETA**) in an area pinned to the bottom of the screen.
+When a folder finishes, a permanent line is printed above the area and the
+remaining bars move up and continue:
+
+- `✓ <Folder>: N messages migrated` when everything copied, or
+- `✗ <Folder>: N migrated, F failed` when some messages failed.
+
+The overall totals (including the total failure count) are shown in the summary
+at the end; full per-message error details are in the state DB. How many folders run at once is
 `--folder-concurrency` (default 4); the total number of concurrent message
 copies across all folders is capped by `--threads` (default 4). In this mode
 per-message errors are not printed live (they would corrupt the area) — they are

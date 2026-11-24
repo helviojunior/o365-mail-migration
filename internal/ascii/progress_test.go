@@ -104,6 +104,27 @@ func TestProgressCounters(t *testing.T) {
 	}
 }
 
+func TestCompletionLine(t *testing.T) {
+	ok := completionLine("Inbox", 10, 0)
+	if !strings.Contains(ok, "✓") || !strings.Contains(ok, "messages migrated") {
+		t.Fatalf("success line wrong: %q", ok)
+	}
+	if strings.Contains(ok, "failed") {
+		t.Fatalf("success line should not mention failures: %q", ok)
+	}
+
+	bad := completionLine("Inbox", 10, 3)
+	for _, want := range []string{"✗", "migrated", "failed"} {
+		if !strings.Contains(bad, want) {
+			t.Fatalf("failure line missing %q: %q", want, bad)
+		}
+	}
+	// 10 processed, 3 failed -> 7 migrated reported.
+	if !strings.Contains(bad, "7") || !strings.Contains(bad, "3") {
+		t.Fatalf("failure line counts wrong (want 7 migrated / 3 failed): %q", bad)
+	}
+}
+
 func TestProgressDisabledIsNoop(t *testing.T) {
 	p := NewProgress(10, false)
 	bar := p.StartFolder("Inbox", 5)
