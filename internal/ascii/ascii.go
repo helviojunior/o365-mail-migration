@@ -14,22 +14,27 @@ import (
 // logoArt is the coloured "O365" banner. ANSI SGR escapes are written with a
 // bare "[0..." for source legibility; the ESC byte is substituted in by the
 // package-level logo var below.
-const logoArt = `[0;37m ▄▀▀▄  ▄[0;97;47m▄▄▄[0;37m▄   ▄[0;97;47m▄▄▄[0;37m  [0;97m██[0;97;47m▄▄▄[0;37m▄ [0m
-[0;97;47m▄[0;97;41m█[0;37m  [0;97;41m█[0;97;47m▄[0;37m ▀[0;97;47m▀▀[0;37m [0;97;41m█[0;97;47m▄[0;37m [0;97;47m▄[0;97;41m█[0;37m [0;97;47m▀▀[0;37m  [0;97;47m█[0;97;41m█[0;37m   [0;97;41m▒[0;37m█[0m
-[0;97;41m██[0;37m  [0;97;41m██[0;37m     [0;97;41m██[0;37m [0;97;41m██[0;37m     [0;97m██▄▄▄[0;37m  [0m
-[0;97;41m██[0;37m  [0;97;41m██[0;37m   ▄▄[0;97;41m▓▓[0;37m [0;97;41m▓▓[0;97;47m▒▀[0;97;41m█[0;97m▄[0;37m  [0;97m▀[0;37m▀[0;97m▀▀[0;97;41m▒[0;37m▄[0m
-[0;91;41m▓▓[0;37m  [0;91;41m▓▓[0;37m     [0;91;41m▓▓[0;37m [0;91;41m▓▓[0;37m  [0;97m█[0;97;47m▄[0;37m [0;91;47m▄▄[0;37m   [0;91;41m▓▓[0m
-[0;91;41m▀█[0;37m  [0;91;41m█▀[0;37m  [0;31m▄▄░[0;91;41m█▀[0;37m [0;91;41m▀█[0;37m  [0;91;41m▓▓[0;37m [0;91;41m▒▓[0;37m   [0;91;41m██[0m
-[0;37m [0;31m▀▄▄▀[0;37m   [0;91;41m ▀▀[0;31m▀[0;37m   [0;31m▀[0;91;41m▀▀ [0;31m▀[0;37m [0;91m███[0;91;41m██[0;91m▀[0;37m [0m`
+const logoArt = ` [0;37m ▄▀▀▄  ▄[0;97;47m▄▄▄[0;37m▄   ▄[0;97;47m▄▄▄[0;37m  [0;97m██[0;97;47m▄▄▄[0;37m▄ [0m
+  [0;97;47m▄[0;97;41m█[0;37m  [0;97;41m█[0;97;47m▄[0;37m ▀[0;97;47m▀▀[0;37m [0;97;41m█[0;97;47m▄[0;37m [0;97;47m▄[0;97;41m█[0;37m [0;97;47m▀▀[0;37m  [0;97;47m█[0;97;41m█[0;37m   [0;97;41m▒[0;37m█[0m
+  [0;97;41m██[0;37m  [0;97;41m██[0;37m     [0;97;41m██[0;37m [0;97;41m██[0;37m     [0;97m██▄▄▄[0;37m  [0m
+  [0;97;41m██[0;37m  [0;97;41m██[0;37m   ▄▄[0;97;41m▓▓[0;37m [0;97;41m▓▓[0;97;47m▒▀[0;97;41m█[0;97m▄[0;37m  [0;97m▀[0;37m▀[0;97m▀▀[0;97;41m▒[0;37m▄[0m
+  [0;91;41m▓▓[0;37m  [0;91;41m▓▓[0;37m     [0;91;41m▓▓[0;37m [0;91;41m▓▓[0;37m  [0;97m█[0;97;47m▄[0;37m [0;91;47m▄▄[0;37m   [0;91;41m▓▓[0m
+  [0;91;41m▀█[0;37m  [0;91;41m█▀[0;37m  [0;31m▄▄░[0;91;41m█▀[0;37m [0;91;41m▀█[0;37m  [0;91;41m▓▓[0;37m [0;91;41m▒▓[0;37m   [0;91;41m██[0m
+  [0;37m [0;31m▀▄▄▀[0;37m   [0;91;41m ▀▀[0;31m▀[0;37m   [0;31m▀[0;91;41m▀▀ [0;31m▀[0;37m [0;91m███[0;91;41m██[0;91m▀[0;37m [0m`
 
 // logo is logoArt with real ESC bytes substituted for the bare "[0" markers.
 var logo = strings.ReplaceAll(logoArt, "[0", "\x1b[0")
 
-// Logo returns the banner including the current version.
+// Logo returns the banner including the current version. The version/author
+// line is right-aligned to the subtitle width.
 func Logo() string {
+	subtitle := " Mailbox migration between Microsoft 365 tenants"
+	ver := fmt.Sprintf("v%s by Helvio Junior (m4v3r1ck)", version.Version)
+	if pad := len([]rune(subtitle)) - len([]rune(ver)); pad > 0 {
+		ver = strings.Repeat(" ", pad) + ver
+	}
 	return "\n" + logo +
-		"\n   O365 Mail Migration\n Mailbox migration between Microsoft 365 tenants" +
-		fmt.Sprintf("\n ver. %s by Helvio Junior (m4v3r1ck)\n", version.Version)
+		"    Mail Migration\n\n" + subtitle + "\n" + ver + "\n"
 }
 
 // LogoHelp prefixes a help/long text with the banner.
