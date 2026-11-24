@@ -9,7 +9,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/pterm/pterm v0.12.84
 	github.com/spf13/cobra v1.10.2
-	golang.org/x/term v0.43.0
+	golang.org/x/term v0.48.0
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/driver/postgres v1.6.3
 	gorm.io/gorm v1.31.2
@@ -64,7 +64,7 @@ require (
 	golang.org/x/exp v0.0.0-20231006140011-7918f672742d // indirect
 	golang.org/x/net v0.38.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.44.0 // indirect
+	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	modernc.org/libc v1.22.5 // indirect
 	modernc.org/mathutil v1.5.0 // indirect
