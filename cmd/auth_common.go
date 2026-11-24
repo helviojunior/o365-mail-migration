@@ -36,6 +36,11 @@ func runDeviceAuth(role, cacheFile string) error {
 		return fmt.Errorf("device-code login failed: %w", err)
 	}
 
+	// Pin the account we just signed into. The cache file may already hold other
+	// accounts from earlier logins, and silent acquisition would otherwise act
+	// as an arbitrary one — recording the wrong person for this role.
+	auth.SetHomeAccountID(res.HomeAccountID)
+
 	client := graph.NewClient(auth)
 	me, err := client.Me(ctx)
 	if err != nil {

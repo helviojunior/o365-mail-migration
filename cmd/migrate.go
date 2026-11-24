@@ -66,6 +66,15 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 			return fmt.Errorf("opening state DB: %w", err)
 		}
 
+		// Pin each side to the intended cached account before any token is used.
+		// A cache file can hold several sign-ins; if ambiguous, the user is asked.
+		if err := resolveRoleAccount(ctx, srcAuth, db, "source", opts.Auth.SourceCache); err != nil {
+			return err
+		}
+		if err := resolveRoleAccount(ctx, dstAuth, db, "destination", opts.Auth.DestCache); err != nil {
+			return err
+		}
+
 		mig, err := runner.NewMigrator(ctx, *opts, db, src, dst)
 		if err != nil {
 			return err

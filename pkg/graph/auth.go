@@ -102,6 +102,31 @@ func NewAuthenticator(clientID, tenant, authorityBase string, scopes []string, c
 // SetHomeAccountID pins silent token acquisition to a specific cached account.
 func (a *Authenticator) SetHomeAccountID(id string) { a.homeID = id }
 
+// AccountInfo is a cached account's stable identifier and its username.
+type AccountInfo struct {
+	HomeAccountID string
+	Username      string
+}
+
+// Accounts lists the accounts currently present in the token-cache file. A
+// single cache file accumulates every interactive sign-in, so it can hold more
+// than one account; callers use this to resolve which identity to act as
+// instead of trusting an arbitrary order.
+func (a *Authenticator) Accounts(ctx context.Context) ([]AccountInfo, error) {
+	accs, err := a.client.Accounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AccountInfo, 0, len(accs))
+	for _, acc := range accs {
+		out = append(out, AccountInfo{
+			HomeAccountID: acc.HomeAccountID,
+			Username:      acc.PreferredUsername,
+		})
+	}
+	return out, nil
+}
+
 // DeviceCodeResult carries the identity resolved after an interactive login.
 type DeviceCodeResult struct {
 	AccessToken   string
@@ -142,7 +167,10 @@ func (a *Authenticator) Token(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("no cached account in %s; run the auth command first", a.cacheFile)
 	}
 
-	account := accounts[0]
+	// Resolve which cached account to act as. MSAL returns accounts from a map,
+	// so their order is unstable: never pick accounts[0] blindly when more than
+	// one is cached — that is how a silent token ends up for the wrong person.
+	var account public.Account
 	if a.homeID != "" {
 		for _, acc := range accounts {
 			if acc.HomeAccountID == a.homeID {
@@ -150,6 +178,13 @@ func (a *Authenticator) Token(ctx context.Context) (string, error) {
 				break
 			}
 		}
+		if account.IsZero() {
+			return "", fmt.Errorf("pinned account %s not found in %s; re-run the auth command", a.homeID, a.cacheFile)
+		}
+	} else if len(accounts) == 1 {
+		account = accounts[0]
+	} else {
+		return "", fmt.Errorf("%d accounts cached in %s and none selected; pin one with SetHomeAccountID (re-run the auth command)", len(accounts), a.cacheFile)
 	}
 
 	res, err := a.client.AcquireTokenSilent(ctx, a.scopes, public.WithSilentAccount(account))
