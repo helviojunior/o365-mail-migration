@@ -9,6 +9,8 @@ flags and categories).
 Built in the same style as [enumdns](https://github.com/helviojunior/enumdns)
 (Go + cobra + charmbracelet/log + gorm/sqlite). BSD-2-Clause.
 
+![o365migrate running](docs/screenshot-migrate.png)
+
 > ⚠️ **Authorized use only.** Migrate mailboxes you own or are explicitly
 > authorized to move. You interactively sign in as the source and destination
 > users, so the tool only ever touches those two mailboxes.
