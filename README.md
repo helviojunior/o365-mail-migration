@@ -1,9 +1,10 @@
-# mailmigrate
+# O365 Mail Migration
 
-Command-line tool to **migrate an entire mailbox between two different Microsoft
-365 tenants** using the Microsoft Graph API — including Inbox, Archive, Deleted
-Items, Junk, Sent, Drafts and all custom folders — while preserving the original
-metadata (received/sent dates, read state, follow-up flags and categories).
+Command-line tool (`o365migrate`) to **migrate an entire mailbox between two
+different Microsoft 365 tenants** using the Microsoft Graph API — including
+Inbox, Archive, Deleted Items, Junk, Sent, Drafts and all custom folders — while
+preserving the original metadata (received/sent dates, read state, follow-up
+flags and categories).
 
 Built in the same style as [enumdns](https://github.com/helviojunior/enumdns)
 (Go + cobra + charmbracelet/log + gorm/sqlite). BSD-2-Clause.
@@ -43,39 +44,47 @@ Writing those properties on an already-imported message is **best-effort**: some
 tenants may not reflect them in `receivedDateTime`. Run with `--verify-dates` on
 a test mailbox — it re-reads each copy and reports any drift in the summary.
 
-State is tracked in a SQLite DB (`~/.mailmigrate/state.db`), so a run is
+State is tracked in a SQLite DB (`~/.o365migrate/state.db`), so a run is
 **resumable and idempotent**: already-migrated messages are skipped unless you
 pass `--force`.
 
 ## Install / build
 
 ```bash
-make local          # builds ./build/mailmigrate_<os>_<arch>
+make local          # builds ./build/o365migrate_<os>_<arch>
 # or
-go build -o mailmigrate .
+go build -o o365migrate .
 ```
 
 ## Usage
 
 ```bash
 # 1. Sign in to both tenants (opens a device-code prompt: URL + code)
-mailmigrate auth-source
-mailmigrate auth-destination
+o365migrate auth-source
+o365migrate auth-destination
 
 # 2. Preview what will be migrated
-mailmigrate migrate --dry-run
+o365migrate migrate --dry-run
 
 # 3. Run it
-mailmigrate migrate
+o365migrate migrate
 # non-interactive:
-mailmigrate migrate --yes --threads 4
+o365migrate migrate --yes --threads 4
 
 # Only some folders (prefix match on the folder path):
-mailmigrate migrate --include-folder Inbox --include-folder Archive
-mailmigrate migrate --exclude-folder "Junk Email"
+o365migrate migrate --include-folder Inbox --include-folder Archive
+o365migrate migrate --exclude-folder "Junk Email"
 ```
 
 To migrate several users, repeat the three steps per user (one mailbox per run).
+
+### Progress
+
+On an interactive terminal the run shows a live status line with the current
+folder, per-folder counter, overall percentage, elapsed time and ETA. When the
+output is **not** a TTY (piped, redirected or run under CI/cron), it instead logs
+a plain `[status] …` snapshot every 60 seconds. Both are suppressed with
+`--quiet`.
 
 ### Authentication options
 
@@ -84,7 +93,7 @@ By default it uses **Thunderbird's generic public client**
 is overridable:
 
 ```bash
-mailmigrate auth-source \
+o365migrate auth-source \
   --client-id 9e5f94bc-e8a4-4e73-b8be-63364c29d753 \
   --tenant common \
   --authority https://login.microsoftonline.com \
@@ -121,9 +130,9 @@ plus a hint.
 
 | Path | Purpose |
 |------|---------|
-| `~/.mailmigrate/source.json` | Source token cache (OAuth tokens — keep private) |
-| `~/.mailmigrate/destination.json` | Destination token cache |
-| `~/.mailmigrate/state.db` | Migration progress (folders + per-message status) |
+| `~/.o365migrate/source.json` | Source token cache (OAuth tokens — keep private) |
+| `~/.o365migrate/destination.json` | Destination token cache |
+| `~/.o365migrate/state.db` | Migration progress (folders + per-message status) |
 
 ## Development
 

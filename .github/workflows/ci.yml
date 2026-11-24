@@ -72,8 +72,8 @@ jobs:
 
     - name: Build application
       run: |
-        echo "Building mailmigrate..."
-        if ! go build -v -o mailmigrate .; then
+        echo "Building o365migrate..."
+        if ! go build -v -o o365migrate .; then
           echo "❌ Build failed"
           exit 1
         fi
@@ -81,11 +81,11 @@ jobs:
 
     - name: Test binary execution
       run: |
-        ./mailmigrate --help > /dev/null 2>&1 || { echo "❌ Binary execution failed"; exit 1; }
-        ./mailmigrate version || echo "Version command test"
-        ./mailmigrate auth-source --help > /dev/null || echo "auth-source help test"
-        ./mailmigrate auth-destination --help > /dev/null || echo "auth-destination help test"
-        ./mailmigrate migrate --help > /dev/null || echo "migrate help test"
+        ./o365migrate --help > /dev/null 2>&1 || { echo "❌ Binary execution failed"; exit 1; }
+        ./o365migrate version || echo "Version command test"
+        ./o365migrate auth-source --help > /dev/null || echo "auth-source help test"
+        ./o365migrate auth-destination --help > /dev/null || echo "auth-destination help test"
+        ./o365migrate migrate --help > /dev/null || echo "migrate help test"
         echo "✅ Command tests completed"
 
   # Security analysis

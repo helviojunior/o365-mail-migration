@@ -75,7 +75,7 @@ jobs:
 
     - name: Build application
       run: |
-        if ! go build -v -o mailmigrate .; then
+        if ! go build -v -o o365migrate .; then
           echo "❌ Build failed"
           exit 1
         fi
@@ -83,11 +83,11 @@ jobs:
 
     - name: Test binary execution
       run: |
-        if ! ./mailmigrate --help > /dev/null 2>&1; then
+        if ! ./o365migrate --help > /dev/null 2>&1; then
           echo "❌ Binary execution failed"
           exit 1
         fi
-        ./mailmigrate version || echo "Version command test"
+        ./o365migrate version || echo "Version command test"
         echo "✅ Binary executes correctly"
 
   security-validation:

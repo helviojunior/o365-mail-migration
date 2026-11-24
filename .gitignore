@@ -5,8 +5,8 @@
 *.dylib
 *.sqlite3
 *.jsonl
-mailmigrate
-mailmigrate.exe
+o365migrate
+o365migrate.exe
 *.version
 *.verstr
 *.ldflags
@@ -19,7 +19,7 @@ build/
 
 # Local token caches and state (NEVER commit these - they hold OAuth tokens)
 *.token
-.mailmigrate/
+.o365migrate/
 
 # Test binary, build with `go test -c`
 *.test

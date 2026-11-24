@@ -25,14 +25,14 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "mailmigrate",
-	Short: "mailmigrate migrates mailboxes between Microsoft 365 tenants",
+	Use:   "o365migrate",
+	Short: "O365 Mail Migration — migrate mailboxes between Microsoft 365 tenants",
 	Long:  ascii.Logo(),
 	Example: `
-   - mailmigrate auth-source
-   - mailmigrate auth-destination
-   - mailmigrate migrate --dry-run
-   - mailmigrate migrate`,
+   - o365migrate auth-source
+   - o365migrate auth-destination
+   - o365migrate migrate --dry-run
+   - o365migrate migrate`,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		if cmd.CalledAs() != "version" && !opts.Logging.Silence {
 			fmt.Println(ascii.Logo())
@@ -52,7 +52,7 @@ var rootCmd = &cobra.Command{
 		}
 		opts.Writer.UserPath = usr.HomeDir
 
-		baseDir = filepath.Join(usr.HomeDir, ".mailmigrate")
+		baseDir = filepath.Join(usr.HomeDir, ".o365migrate")
 		if _, err := tools.CreateDir(baseDir); err != nil {
 			return fmt.Errorf("creating state dir %s: %w", baseDir, err)
 		}
@@ -119,6 +119,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&opts.Auth.Authority, "authority", graph.DefaultAuthority, "Entra ID login authority host (without the tenant segment)")
 	rootCmd.PersistentFlags().StringArrayVar(&opts.Auth.Scopes, "scope", graph.DefaultScopes, "Delegated OAuth scope (repeatable); defaults to the Microsoft Graph Mail scopes")
 
-	rootCmd.PersistentFlags().StringVar(&opts.Writer.CtrlDbURI, "state-db-uri", "", "Migration state DB URI (default sqlite at ~/.mailmigrate/state.db)")
+	rootCmd.PersistentFlags().StringVar(&opts.Writer.CtrlDbURI, "state-db-uri", "", "Migration state DB URI (default sqlite at ~/.o365migrate/state.db)")
 	rootCmd.PersistentFlags().BoolVar(&opts.Writer.DbDebug, "state-db-debug", false, "Enable state DB query debug logging (verbose)")
 }

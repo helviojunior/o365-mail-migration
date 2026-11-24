@@ -12,8 +12,8 @@ var releaseOnly = false
 
 var versionCmd = &cobra.Command{
 	Use:   "version",
-	Short: "Get the mailmigrate version",
-	Long:  ascii.LogoHelp("Get the mailmigrate version."),
+	Short: "Get the O365 Mail Migration version",
+	Long:  ascii.LogoHelp("Get the O365 Mail Migration version."),
 	Run: func(cmd *cobra.Command, args []string) {
 		if releaseOnly {
 			fmt.Printf("%s\n", version.Version)

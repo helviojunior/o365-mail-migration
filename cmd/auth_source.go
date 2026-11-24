@@ -16,9 +16,9 @@ caches the delegated access/refresh token. Run this once before ` + "`migrate`" 
 
 The signed-in user's own mailbox is the one that will be read.`)),
 	Example: `
-   - mailmigrate auth-source
-   - mailmigrate auth-source --tenant contoso.onmicrosoft.com
-   - mailmigrate auth-source --client-id <your-app-id>`,
+   - o365migrate auth-source
+   - o365migrate auth-source --tenant contoso.onmicrosoft.com
+   - o365migrate auth-source --client-id <your-app-id>`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runDeviceAuth("source", opts.Auth.SourceCache)
 	},
@@ -26,5 +26,5 @@ The signed-in user's own mailbox is the one that will be read.`)),
 
 func init() {
 	rootCmd.AddCommand(authSourceCmd)
-	authSourceCmd.Flags().StringVar(&opts.Auth.SourceCache, "cache-file", "", "Token cache file (default ~/.mailmigrate/source.json)")
+	authSourceCmd.Flags().StringVar(&opts.Auth.SourceCache, "cache-file", "", "Token cache file (default ~/.o365migrate/source.json)")
 }

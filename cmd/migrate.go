@@ -40,10 +40,10 @@ Date handling:
 Run ` + "`auth-source`" + ` and ` + "`auth-destination`" + ` first. The run is
 resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is set.`)),
 	Example: `
-   - mailmigrate migrate --dry-run
-   - mailmigrate migrate
-   - mailmigrate migrate --yes --threads 4
-   - mailmigrate migrate --include-folder Inbox --include-folder Archive`,
+   - o365migrate migrate --dry-run
+   - o365migrate migrate
+   - o365migrate migrate --yes --threads 4
+   - o365migrate migrate --include-folder Inbox --include-folder Archive`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
