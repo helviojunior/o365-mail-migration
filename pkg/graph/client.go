@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -91,6 +92,14 @@ type APIError struct {
 	Body   string
 	Method string
 	URL    string
+}
+
+// IsNotFound reports whether err is a Graph 404 (ErrorItemNotFound), i.e. the
+// target object no longer exists. Useful when deleting best-effort: a 404 means
+// the item is already gone, so the delete's goal is already satisfied.
+func IsNotFound(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }
 
 func (e *APIError) Error() string {

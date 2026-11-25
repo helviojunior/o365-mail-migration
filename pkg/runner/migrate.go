@@ -396,7 +396,13 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 			// the message is replaced (e.g. to fix copies stuck as drafts).
 			for _, id := range dupIDs {
 				if err := m.dst.DeleteMessage(ctx, id); err != nil {
-					// A failed delete would leave a duplicate; surface it and
+					// A 404 means the copy is already gone (e.g. an auto-processed
+					// meeting response, or a duplicate another worker just
+					// removed). The delete's goal is met, so re-import anyway.
+					if graph.IsNotFound(err) {
+						continue
+					}
+					// Any other failure would leave a duplicate; surface it and
 					// skip the re-import so we don't knowingly create one.
 					atomic.AddInt64(&m.stats.Failed, 1)
 					m.saveMsg(&models.MessageMigration{
