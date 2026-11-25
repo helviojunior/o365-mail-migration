@@ -229,14 +229,45 @@ func (p *Progress) overallLine() string {
 	counts := padLeft(fmt.Sprintf("%d/%d", done, p.total), 11)
 
 	eta := "--"
-	if done > 0 && p.total > done {
-		per := elapsed / time.Duration(done)
-		eta = fmtDuration(per * time.Duration(p.total-done))
+	if d, ok := p.overallETALocked(done, elapsed); ok {
+		eta = fmtDuration(d)
 	}
 
 	return fmt.Sprintf("%s %s %s %3.0f%% · %s · ETA %s",
 		pterm.Bold.Sprint(pterm.LightWhite(name)), pterm.Gray(counts), bar, ratio*100,
 		pterm.Gray(fmtDuration(elapsed)), pterm.Gray(eta))
+}
+
+// overallETALocked estimates the whole run's remaining time from the global
+// average throughput, then clamps it so it is never shorter than the slowest
+// in-flight folder's ETA: the run cannot finish before its slowest active
+// folder does, so the Overall ETA must not display below any folder's. The
+// caller must hold p.mu (it reads p.active). ok is false when it can't be
+// computed yet (nothing done, or already complete).
+func (p *Progress) overallETALocked(done int64, elapsed time.Duration) (time.Duration, bool) {
+	if done <= 0 || p.total <= done {
+		return 0, false
+	}
+	per := elapsed / time.Duration(done)
+	eta := per * time.Duration(p.total-done)
+	for _, fb := range p.active {
+		if fe, ok := folderETA(fb); ok && fe > eta {
+			eta = fe
+		}
+	}
+	return eta, true
+}
+
+// folderETA returns a folder's estimated remaining time from its own throughput
+// so far. ok is false when it can't be computed (nothing done yet, or the folder
+// is already complete).
+func folderETA(fb *FolderBar) (time.Duration, bool) {
+	done := atomic.LoadInt64(&fb.done)
+	if done <= 0 || int64(fb.total) <= done {
+		return 0, false
+	}
+	per := time.Since(fb.start) / time.Duration(done)
+	return per * time.Duration(int64(fb.total)-done), true
 }
 
 // clearAreaLocked erases the live area (caller holds p.mu).
@@ -278,9 +309,8 @@ func (p *Progress) barLine(fb *FolderBar) string {
 	counts := padLeft(fmt.Sprintf("%d/%d", done, fb.total), 11)
 
 	eta := "--"
-	if done > 0 && int64(fb.total) > done {
-		per := elapsed / time.Duration(done)
-		eta = fmtDuration(per * time.Duration(int64(fb.total)-done))
+	if d, ok := folderETA(fb); ok {
+		eta = fmtDuration(d)
 	}
 
 	return fmt.Sprintf("%s %s %s %3.0f%% · %s · ETA %s",
@@ -289,12 +319,13 @@ func (p *Progress) barLine(fb *FolderBar) string {
 }
 
 func (p *Progress) snapshot() {
-	p.mu.Lock()
-	active := len(p.active)
-	p.mu.Unlock()
-
 	done := atomic.LoadInt64(&p.done)
 	elapsed := time.Since(p.start)
+
+	p.mu.Lock()
+	active := len(p.active)
+	etaDur, haveETA := p.overallETALocked(done, elapsed)
+	p.mu.Unlock()
 
 	pct := 0.0
 	if p.total > 0 {
@@ -305,9 +336,8 @@ func (p *Progress) snapshot() {
 	}
 
 	eta := "--"
-	if done > 0 && p.total > 0 && done < p.total {
-		per := elapsed / time.Duration(done)
-		eta = fmtDuration(per * time.Duration(p.total-done))
+	if haveETA {
+		eta = fmtDuration(etaDur)
 	}
 
 	fmt.Fprintf(p.out, "[status] %5.1f%% | %d/%d msgs | %d folders active | %s elapsed | ETA %s\n",
