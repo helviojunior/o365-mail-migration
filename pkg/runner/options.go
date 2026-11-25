@@ -1,5 +1,7 @@
 package runner
 
+import "time"
+
 // Options is the single, flag-bound configuration struct (same pattern as
 // enumdns).
 type Options struct {
@@ -26,6 +28,8 @@ type Options struct {
 	Migrate struct {
 		Threads           int
 		FolderConcurrency int
+		Retries           int           // per-message copy retries before marking failed
+		RetryDelay        time.Duration // delay between those retries
 		IncludeFolders    []string
 		ExcludeFolders    []string
 		DryRun            bool

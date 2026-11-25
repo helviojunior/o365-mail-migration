@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/helviojunior/o365-mail-migration/internal/ascii"
 	"github.com/helviojunior/o365-mail-migration/pkg/database"
@@ -157,6 +158,8 @@ func init() {
 
 	migrateCmd.Flags().IntVarP(&opts.Migrate.Threads, "threads", "t", 4, "Global cap on concurrent message copies (across all folders)")
 	migrateCmd.Flags().IntVar(&opts.Migrate.FolderConcurrency, "folder-concurrency", 2, "How many folders to migrate at once (each shows its own progress bar); keep it low to avoid Graph per-mailbox throttling")
+	migrateCmd.Flags().IntVar(&opts.Migrate.Retries, "retries", 5, "Retry a failed message copy up to this many times before marking it failed (many Graph errors are transient); 0 disables retrying")
+	migrateCmd.Flags().DurationVar(&opts.Migrate.RetryDelay, "retry-delay", 5*time.Second, "Wait this long between the per-message retries from --retries")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.DryRun, "dry-run", false, "List folders and message counts without copying")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy even already-migrated messages: scan the destination, DELETE any existing copy, and import a fresh one (replaces copies stuck as drafts)")

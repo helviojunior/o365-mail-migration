@@ -373,6 +373,48 @@ func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder,
 	return listErr
 }
 
+// retry runs fn and, on a transient-looking error, retries it up to
+// opts.Migrate.Retries more times, sleeping opts.Migrate.RetryDelay between
+// attempts (so Retries=5 means up to 6 attempts total). Many Graph errors —
+// timeouts, sporadic 500s, "failed to get the correct properties" — are
+// transient and clear on retry. It does NOT retry a cancelled context or a 404
+// (the target object is gone, so retrying is pointless). This is independent of
+// --force. Returns the last error after the attempts are exhausted.
+func (m *Migrator) retry(ctx context.Context, what string, fn func() error) error {
+	var err error
+	for attempt := 0; ; attempt++ {
+		if err = fn(); err == nil {
+			return nil
+		}
+		if ctx.Err() != nil || graph.IsNotFound(err) {
+			return err
+		}
+		if attempt >= m.opts.Migrate.Retries {
+			return err
+		}
+		if !m.progress.SuppressLogs() {
+			log.Debugf("retry %d/%d (%s): %v", attempt+1, m.opts.Migrate.Retries, what, err)
+		}
+		if !sleepCtx(ctx, m.opts.Migrate.RetryDelay) {
+			return err
+		}
+	}
+}
+
+// sleepCtx waits for d or until ctx is cancelled; returns true if the full wait
+// elapsed, false if cancelled.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return true
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(d):
+		return true
+	}
+}
+
 func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message, bar *ascii.FolderBar, existing map[string][]string, isDraft bool) {
 	defer bar.Inc() // exactly one tick per message, whatever the outcome
 
@@ -395,7 +437,10 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 			// --force: delete the existing copy/copies, then re-import below so
 			// the message is replaced (e.g. to fix copies stuck as drafts).
 			for _, id := range dupIDs {
-				if err := m.dst.DeleteMessage(ctx, id); err != nil {
+				id := id
+				if err := m.retry(ctx, "delete existing: "+msg.Subject, func() error {
+					return m.dst.DeleteMessage(ctx, id)
+				}); err != nil {
 					// A 404 means the copy is already gone (e.g. an auto-processed
 					// meeting response, or a duplicate another worker just
 					// removed). The delete's goal is met, so re-import anyway.
@@ -442,8 +487,11 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 		MigratedAt:    time.Now(),
 	}
 
-	mime, err := m.src.GetMIME(ctx, msg.ID)
-	if err != nil {
+	var mime []byte
+	if err := m.retry(ctx, "get MIME: "+msg.Subject, func() (e error) {
+		mime, e = m.src.GetMIME(ctx, msg.ID)
+		return e
+	}); err != nil {
 		m.fail(bar, &rec, fmt.Errorf("get MIME: %w", err))
 		return
 	}
@@ -460,8 +508,11 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 		return
 	}
 
-	newID, err := m.dst.ImportMIME(ctx, destID, mime, isDraft)
-	if err != nil {
+	var newID string
+	if err := m.retry(ctx, "import MIME: "+msg.Subject, func() (e error) {
+		newID, e = m.dst.ImportMIME(ctx, destID, mime, isDraft)
+		return e
+	}); err != nil {
 		m.fail(bar, &rec, fmt.Errorf("import MIME: %w", err))
 		return
 	}
