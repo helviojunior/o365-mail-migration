@@ -156,7 +156,7 @@ func init() {
 	rootCmd.AddCommand(migrateCmd)
 
 	migrateCmd.Flags().IntVarP(&opts.Migrate.Threads, "threads", "t", 4, "Global cap on concurrent message copies (across all folders)")
-	migrateCmd.Flags().IntVar(&opts.Migrate.FolderConcurrency, "folder-concurrency", 1, "How many folders to migrate at once (each shows its own progress bar); 1 keeps per-mailbox request pressure low to avoid Graph throttling")
+	migrateCmd.Flags().IntVar(&opts.Migrate.FolderConcurrency, "folder-concurrency", 2, "How many folders to migrate at once (each shows its own progress bar); keep it low to avoid Graph per-mailbox throttling")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.DryRun, "dry-run", false, "List folders and message counts without copying")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy even already-migrated messages: scan the destination, DELETE any existing copy, and import a fresh one (replaces copies stuck as drafts)")
