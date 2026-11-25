@@ -122,14 +122,15 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 			return err
 		}
 
-		// Final steps: mailbox settings (rules, automatic replies) and calendars.
-		// Skipped on a retry-failed run, which is a targeted message retry only.
-		if !opts.Migrate.RetryFailed && !errors.Is(err, context.Canceled) {
-			if opts.Migrate.Settings {
-				stats = mig.MigrateSettings(ctx)
-			}
+		// Final steps (skipped on a dry run, on a retry-failed run, or if
+		// interrupted): calendars first — the first item after the mailboxes —
+		// then mailbox settings (rules, automatic replies).
+		if !opts.Migrate.DryRun && !opts.Migrate.RetryFailed && !errors.Is(err, context.Canceled) {
 			if opts.Migrate.Calendars {
 				stats = mig.MigrateCalendars(ctx)
+			}
+			if opts.Migrate.Settings {
+				stats = mig.MigrateSettings(ctx)
 			}
 		}
 
@@ -145,13 +146,13 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 		if opts.Migrate.VerifyDates {
 			summary += fmt.Sprintf("- Date drift (received/sent mismatch): **%d**\n", stats.DateDrift)
 		}
-		if stats.SettingsRun {
-			summary += fmt.Sprintf("- Inbox rules: **%d copied, %d failed**\n- Automatic replies: **%s**\n",
-				stats.RulesCopied, stats.RulesFailed, stats.AutoReply)
-		}
 		if stats.CalendarsRun {
 			summary += fmt.Sprintf("- Calendars: **%d**\n- Events: **%d copied, %d skipped, %d failed**\n",
 				stats.CalendarsCopied, stats.EventsCopied, stats.EventsSkipped, stats.EventsFailed)
+		}
+		if stats.SettingsRun {
+			summary += fmt.Sprintf("- Inbox rules: **%d copied, %d failed**\n- Automatic replies: **%s**\n",
+				stats.RulesCopied, stats.RulesFailed, stats.AutoReply)
 		}
 		fmt.Println(ascii.Markdown(summary))
 

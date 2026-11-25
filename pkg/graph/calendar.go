@@ -82,6 +82,22 @@ func (c *Client) ListEvents(ctx context.Context, calendarID string, fn func(map[
 	return nil
 }
 
+// CountEvents returns how many events a calendar holds (ids only), used to size
+// the progress bar before the copy pass.
+func (c *Client) CountEvents(ctx context.Context, calendarID string) (int, error) {
+	n := 0
+	next := fmt.Sprintf("/me/calendars/%s/events?$top=100&$select=id", url.PathEscape(calendarID))
+	for next != "" {
+		var page odataList[map[string]interface{}]
+		if err := c.getJSON(ctx, next, &page); err != nil {
+			return 0, err
+		}
+		n += len(page.Value)
+		next = page.NextLink
+	}
+	return n, nil
+}
+
 // CreateEvent creates an event in a calendar from an already-sanitized body and
 // returns the new event id.
 func (c *Client) CreateEvent(ctx context.Context, calendarID string, body map[string]interface{}) (string, error) {

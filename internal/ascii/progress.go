@@ -124,11 +124,12 @@ type FolderBar struct {
 	done   int64
 	failed int64
 	start  time.Time
+	unit   string // "messages", "events", … (for the completion line)
 }
 
-// StartFolder begins tracking a folder of total messages.
+// StartFolder begins tracking a folder of total items (messages by default).
 func (p *Progress) StartFolder(name string, total int) *FolderBar {
-	fb := &FolderBar{p: p, name: name, total: total, start: time.Now()}
+	fb := &FolderBar{p: p, name: name, total: total, start: time.Now(), unit: "messages"}
 	if !p.Enabled() {
 		return fb
 	}
@@ -136,6 +137,14 @@ func (p *Progress) StartFolder(name string, total int) *FolderBar {
 	p.active = append(p.active, fb)
 	p.mu.Unlock()
 	return fb
+}
+
+// SetUnit changes the noun shown on the permanent completion line (e.g.
+// "events" for a calendar). Defaults to "messages".
+func (fb *FolderBar) SetUnit(unit string) {
+	if unit != "" {
+		fb.unit = unit
+	}
 }
 
 // Inc records one processed message in this folder.
@@ -172,16 +181,19 @@ func (fb *FolderBar) Done() {
 
 	if p.tty {
 		p.clearAreaLocked()
-		io.WriteString(p.out, completionLine(fb.name, done, failed)+"\n")
+		io.WriteString(p.out, completionLine(fb.name, fb.unit, done, failed)+"\n")
 		p.drawLocked()
 	}
 }
 
 // completionLine formats the permanent per-folder result line.
-func completionLine(name string, done, failed int64) string {
+func completionLine(name, unit string, done, failed int64) string {
+	if unit == "" {
+		unit = "messages"
+	}
 	if failed == 0 {
-		return fmt.Sprintf("%s %s: %s messages migrated",
-			pterm.Green("✓"), pterm.Cyan(name), pterm.Bold.Sprint(done))
+		return fmt.Sprintf("%s %s: %s %s migrated",
+			pterm.Green("✓"), pterm.Cyan(name), pterm.Bold.Sprint(done), unit)
 	}
 	return fmt.Sprintf("%s %s: %s migrated, %s failed",
 		pterm.Red("✗"), pterm.Cyan(name), pterm.Bold.Sprint(done-failed), pterm.Red(pterm.Bold.Sprint(failed)))

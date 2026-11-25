@@ -6,21 +6,21 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/helviojunior/o365-mail-migration/internal/ascii"
 	"github.com/helviojunior/o365-mail-migration/pkg/graph"
 	"github.com/helviojunior/o365-mail-migration/pkg/log"
 	"github.com/helviojunior/o365-mail-migration/pkg/models"
 	"gorm.io/gorm/clause"
 )
 
-// MigrateCalendars copies calendars and their events as a final step. For each
-// source calendar it finds or creates the matching destination calendar, then
-// copies every event (single instances and recurring series masters; individual
-// occurrences are generated from their series, so they are not copied), deduped
-// against the local state DB so re-runs do not duplicate. With --force an
-// already-copied event's destination copy is deleted and recreated.
-//
-// It runs after the live progress area is gone, so its logs are clean. Failures
-// are logged and counted, never fatal.
+// MigrateCalendars copies calendars and their events. It is the first step after
+// the mailbox copy. For each source calendar it finds or creates the matching
+// destination calendar (default maps to default), then copies every event
+// (single instances and recurring series masters; individual occurrences are
+// regenerated from their series). The copy is resumable and deduped via a local
+// state table, so re-runs do not duplicate; --force deletes the previous copy
+// and recreates. It shows a live progress area (one bar per calendar) like the
+// mailbox phase. Failures are logged and counted, never fatal.
 func (m *Migrator) MigrateCalendars(ctx context.Context) Stats {
 	m.stats.CalendarsRun = true
 	log.Warn("Migrating calendars and events...")
@@ -46,31 +46,59 @@ func (m *Migrator) MigrateCalendars(ctx context.Context) Stats {
 		}
 	}
 
+	// Resolve each source calendar's destination and event count up front, so the
+	// progress bars have real totals.
+	type calJob struct {
+		sc     graph.Calendar
+		destID string
+		count  int
+	}
+	var jobs []calJob
+	var grandTotal int64
 	for _, sc := range srcCals {
 		if ctx.Err() != nil {
 			break
 		}
-		destCalID, err := m.ensureDestCalendar(ctx, sc, destByName, destDefaultID)
+		destID, err := m.ensureDestCalendar(ctx, sc, destByName, destDefaultID)
 		if err != nil {
 			log.Warnf("calendar %q: could not resolve destination: %v", sc.Name, err)
 			continue
 		}
 		atomic.AddInt64(&m.stats.CalendarsCopied, 1)
-		log.Warnf("Calendar: %s", sc.Name)
+		n, err := m.src.CountEvents(ctx, sc.ID)
+		if err != nil {
+			log.Warnf("calendar %q: could not count events: %v", sc.Name, err)
+		}
+		jobs = append(jobs, calJob{sc: sc, destID: destID, count: n})
+		grandTotal += int64(n)
+	}
 
-		if err := m.src.ListEvents(ctx, sc.ID, func(ev map[string]interface{}) error {
+	// Live progress for the calendar phase (the mailbox phase's area is already
+	// finished). One bar per calendar, mirroring the folder bars.
+	m.progress = ascii.NewProgress(grandTotal, !m.opts.Logging.Silence)
+	m.progress.Start()
+	defer m.progress.Finish()
+
+	for _, j := range jobs {
+		if ctx.Err() != nil {
+			break
+		}
+		bar := m.progress.StartFolder(j.sc.Name, j.count)
+		bar.SetUnit("events")
+		if !m.progress.Enabled() {
+			log.Warnf("Calendar: %s (%d events)", j.sc.Name, j.count)
+		}
+		if err := m.src.ListEvents(ctx, j.sc.ID, func(ev map[string]interface{}) error {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			m.copyEvent(ctx, sc.Name, destCalID, ev)
+			m.copyEvent(ctx, j.sc.Name, j.destID, ev, bar)
 			return nil
-		}); err != nil && ctx.Err() == nil {
-			log.Warnf("calendar %q: listing events failed: %v", sc.Name, err)
+		}); err != nil && ctx.Err() == nil && !m.progress.SuppressLogs() {
+			log.Warnf("calendar %q: listing events failed: %v", j.sc.Name, err)
 		}
+		bar.Done()
 	}
-
-	log.Warnf("Calendars: %d · events copied: %d, skipped: %d, failed: %d",
-		m.stats.CalendarsCopied, m.stats.EventsCopied, m.stats.EventsSkipped, m.stats.EventsFailed)
 	return m.stats
 }
 
@@ -97,8 +125,10 @@ func (m *Migrator) ensureDestCalendar(ctx context.Context, sc graph.Calendar, de
 }
 
 // copyEvent copies one source event into the destination calendar, recording
-// state for resume/dedup.
-func (m *Migrator) copyEvent(ctx context.Context, calendarName, destCalID string, ev map[string]interface{}) {
+// state for resume/dedup. It ticks the bar exactly once, whatever the outcome.
+func (m *Migrator) copyEvent(ctx context.Context, calendarName, destCalID string, ev map[string]interface{}, bar *ascii.FolderBar) {
+	defer bar.Inc()
+
 	srcID, _ := ev["id"].(string)
 	ical, _ := ev["iCalUId"].(string)
 	subject, _ := ev["subject"].(string)
@@ -132,7 +162,7 @@ func (m *Migrator) copyEvent(ctx context.Context, calendarName, destCalID string
 			if err := m.retry(ctx, "delete event: "+subject, func() error {
 				return m.dst.DeleteEvent(ctx, prevDestID)
 			}); err != nil && !graph.IsNotFound(err) {
-				m.failEvent(&rec, fmt.Errorf("delete existing before re-copy: %w", err), subject)
+				m.failEvent(&rec, fmt.Errorf("delete existing before re-copy: %w", err), subject, bar)
 				return
 			}
 		}
@@ -144,7 +174,7 @@ func (m *Migrator) copyEvent(ctx context.Context, calendarName, destCalID string
 		newID, e = m.dst.CreateEvent(ctx, destCalID, body)
 		return e
 	}); err != nil {
-		m.failEvent(&rec, err, subject)
+		m.failEvent(&rec, err, subject, bar)
 		return
 	}
 
@@ -156,8 +186,9 @@ func (m *Migrator) copyEvent(ctx context.Context, calendarName, destCalID string
 	m.saveEvent(&rec)
 }
 
-func (m *Migrator) failEvent(rec *models.EventMigration, err error, subject string) {
+func (m *Migrator) failEvent(rec *models.EventMigration, err error, subject string, bar *ascii.FolderBar) {
 	atomic.AddInt64(&m.stats.EventsFailed, 1)
+	bar.Fail()
 	rec.Status = "failed"
 	rec.Error = truncate(err.Error(), 1000)
 	rec.MigratedAt = time.Now()

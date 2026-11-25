@@ -108,7 +108,7 @@ func TestProgressCounters(t *testing.T) {
 }
 
 func TestCompletionLine(t *testing.T) {
-	ok := completionLine("Inbox", 10, 0)
+	ok := completionLine("Inbox", "messages", 10, 0)
 	if !strings.Contains(ok, "✓") || !strings.Contains(ok, "messages migrated") {
 		t.Fatalf("success line wrong: %q", ok)
 	}
@@ -116,7 +116,13 @@ func TestCompletionLine(t *testing.T) {
 		t.Fatalf("success line should not mention failures: %q", ok)
 	}
 
-	bad := completionLine("Inbox", 10, 3)
+	// The unit noun is configurable (e.g. "events" for calendars).
+	ev := completionLine("Work", "events", 5, 0)
+	if !strings.Contains(ev, "events migrated") {
+		t.Fatalf("unit not honoured: %q", ev)
+	}
+
+	bad := completionLine("Inbox", "messages", 10, 3)
 	for _, want := range []string{"✗", "migrated", "failed"} {
 		if !strings.Contains(bad, want) {
 			t.Fatalf("failure line missing %q: %q", want, bad)
