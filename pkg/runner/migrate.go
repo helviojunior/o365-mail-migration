@@ -332,11 +332,15 @@ func (m *Migrator) ensureDestFolder(ctx context.Context, src graph.MailFolder, m
 // message copy is gated by the migrator's global semaphore so total concurrency
 // stays bounded even with several folders in flight.
 func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder, destID string, bar *ascii.FolderBar) error {
-	// Pre-scan the destination folder so messages already there (from a prior,
-	// possibly interrupted run) are not imported again. This dedups against the
-	// real destination, independent of the local state DB.
-	var existing map[string]bool
-	if m.opts.Migrate.CheckDestination && !m.opts.Migrate.Force {
+	// Pre-scan the destination folder and map each internetMessageId to the
+	// destination message id(s) that carry it. Two uses:
+	//   - normal run: skip messages already there (dedup against the real
+	//     destination, independent of the local state DB);
+	//   - --force run: delete those existing copies in copyOne and re-import,
+	//     so a re-run replaces (e.g. to fix messages stuck as drafts).
+	// It therefore runs whenever we check the destination OR force is set.
+	var existing map[string][]string
+	if m.opts.Migrate.CheckDestination || m.opts.Migrate.Force {
 		if ids, err := m.dst.ListInternetMessageIDs(ctx, destID); err != nil {
 			log.Debugf("destination pre-scan failed for %s: %v", src.Path, err)
 		} else {
@@ -369,7 +373,7 @@ func (m *Migrator) copyFolderMessages(ctx context.Context, src graph.MailFolder,
 	return listErr
 }
 
-func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message, bar *ascii.FolderBar, existing map[string]bool, isDraft bool) {
+func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg graph.Message, bar *ascii.FolderBar, existing map[string][]string, isDraft bool) {
 	defer bar.Inc() // exactly one tick per message, whatever the outcome
 
 	key := msg.InternetMessageID
@@ -384,16 +388,42 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 		return
 	}
 
-	// Already present in the destination folder -> skip and backfill state.
-	if existing != nil && msg.InternetMessageID != "" && existing[msg.InternetMessageID] {
-		atomic.AddInt64(&m.stats.Skipped, 1)
-		m.saveMsg(&models.MessageMigration{
-			DedupKey: dedupKey, SourceMsgID: msg.ID, InternetMsgID: msg.InternetMessageID,
-			FolderPath: folderPath, Subject: truncate(msg.Subject, 500),
-			Status: "done", MigratedAt: time.Now(),
-		})
-		log.Debugf("skip (already in destination): %s", msg.Subject)
-		return
+	// Already present in the destination folder.
+	if existing != nil && msg.InternetMessageID != "" && len(existing[msg.InternetMessageID]) > 0 {
+		dupIDs := existing[msg.InternetMessageID]
+		if m.opts.Migrate.Force {
+			// --force: delete the existing copy/copies, then re-import below so
+			// the message is replaced (e.g. to fix copies stuck as drafts).
+			for _, id := range dupIDs {
+				if err := m.dst.DeleteMessage(ctx, id); err != nil {
+					// A failed delete would leave a duplicate; surface it and
+					// skip the re-import so we don't knowingly create one.
+					atomic.AddInt64(&m.stats.Failed, 1)
+					m.saveMsg(&models.MessageMigration{
+						DedupKey: dedupKey, SourceMsgID: msg.ID, InternetMsgID: msg.InternetMessageID,
+						FolderPath: folderPath, Subject: truncate(msg.Subject, 500),
+						Status: "failed", Error: truncate(fmt.Sprintf("delete existing before re-import: %v", err), 1000),
+						MigratedAt: time.Now(),
+					})
+					if !m.progress.SuppressLogs() {
+						log.Warnf("force: could not delete existing %q, skipping re-import: %v", msg.Subject, err)
+					}
+					return
+				}
+			}
+			log.Debugf("force: deleted %d existing copy/copies before re-import: %s", len(dupIDs), msg.Subject)
+			// fall through to import a fresh, non-draft copy
+		} else {
+			// Normal run: skip and backfill local state.
+			atomic.AddInt64(&m.stats.Skipped, 1)
+			m.saveMsg(&models.MessageMigration{
+				DedupKey: dedupKey, SourceMsgID: msg.ID, InternetMsgID: msg.InternetMessageID,
+				FolderPath: folderPath, Subject: truncate(msg.Subject, 500),
+				Status: "done", MigratedAt: time.Now(),
+			})
+			log.Debugf("skip (already in destination): %s", msg.Subject)
+			return
+		}
 	}
 
 	rec := models.MessageMigration{
@@ -424,7 +454,7 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 		return
 	}
 
-	newID, err := m.dst.ImportMIME(ctx, destID, mime)
+	newID, err := m.dst.ImportMIME(ctx, destID, mime, isDraft)
 	if err != nil {
 		m.fail(bar, &rec, fmt.Errorf("import MIME: %w", err))
 		return
@@ -435,7 +465,7 @@ func (m *Migrator) copyOne(ctx context.Context, folderPath, destID string, msg g
 	// enabled — the original received/sent timestamps via MAPI extended
 	// properties). A failure here is logged but the message still counts as
 	// migrated.
-	if err := m.dst.PatchMessageMeta(ctx, newID, msg, m.opts.Migrate.FixDates, isDraft); err != nil {
+	if err := m.dst.PatchMessageMeta(ctx, newID, msg, m.opts.Migrate.FixDates); err != nil {
 		atomic.AddInt64(&m.stats.MetaFailed, 1)
 		if !m.progress.SuppressLogs() {
 			log.Warnf("metadata patch failed for %q: %v", msg.Subject, err)

@@ -30,6 +30,11 @@ const DefaultAuthority = "https://login.microsoftonline.com"
 // offline_access/openid/profile automatically. Override with --scope.
 var DefaultScopes = []string{
 	"https://graph.microsoft.com/Mail.ReadWrite",
+	// Required by the beta importMime action (used to land copied messages in a
+	// final, non-draft state). If a tenant/app cannot consent to this scope,
+	// imports will fail with 403; override --scope to drop it and fall back to
+	// the draft-producing import.
+	"https://graph.microsoft.com/Mail-Advanced.ReadWrite",
 	"https://graph.microsoft.com/MailboxSettings.ReadWrite",
 	"https://graph.microsoft.com/User.Read",
 }

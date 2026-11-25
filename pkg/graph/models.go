@@ -47,13 +47,14 @@ type Message struct {
 const (
 	propClientSubmitTime    = "SystemTime 0x0039"
 	propMessageDeliveryTime = "SystemTime 0x0E06"
-	// PR_MESSAGE_FLAGS controls read/draft state. Setting it clears the draft
-	// (MSGFLAG_UNSENT) flag that MIME import otherwise leaves set.
-	propMessageFlags = "Integer 0x0E07"
-
-	msgFlagRead   = 0x01 // MSGFLAG_READ
-	msgFlagUnsent = 0x08 // MSGFLAG_UNSENT (message is a draft)
 )
+
+// NOTE on the draft ("This message hasn't been sent") state: a plain MIME
+// POST to /messages ALWAYS creates the message as a draft, and PR_MESSAGE_FLAGS
+// (0x0E07 / MSGFLAG_UNSENT) cannot be changed once the message exists, so no
+// post-hoc PATCH can clear it. The fix is to import via the beta importMime
+// action, which creates the message in a final, non-draft state (see
+// ImportMIME in mail.go). Read state is restored with the normal isRead field.
 
 // singleValueExtendedProperty is one entry of a message's
 // singleValueExtendedProperties collection.

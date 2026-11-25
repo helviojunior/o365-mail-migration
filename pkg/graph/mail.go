@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/helviojunior/o365-mail-migration/pkg/log"
@@ -139,10 +138,29 @@ func (c *Client) GetMIME(ctx context.Context, msgID string) ([]byte, error) {
 
 // ImportMIME creates a message in destFolderID from raw MIME and returns the
 // new message id. Graph expects Content-Type: text/plain with a base64 body.
-func (c *Client) ImportMIME(ctx context.Context, destFolderID string, mime []byte) (string, error) {
+//
+// For normal mail (asDraft=false) it uses the beta importMime action, which is
+// the only way to land the message in a final, NON-draft state. A plain MIME
+// POST to /messages instead always creates a draft ("This message hasn't been
+// sent"), and the draft/unsent flag (PR_MESSAGE_FLAGS 0x0E07) can't be changed
+// after the message exists, so there is no way to fix it afterwards.
+//
+// For genuine Drafts-folder items (asDraft=true) the draft state is correct, so
+// it keeps the v1.0 /messages POST, which preserves them as drafts.
+//
+// importMime is beta-only and needs the Mail-Advanced.ReadWrite scope; a tenant
+// that cannot consent to it gets 403 here.
+func (c *Client) ImportMIME(ctx context.Context, destFolderID string, mime []byte, asDraft bool) (string, error) {
 	b64 := base64.StdEncoding.EncodeToString(mime)
-	path := fmt.Sprintf("/me/mailFolders/%s/messages", url.PathEscape(destFolderID))
-	data, err := c.postRaw(ctx, path, "text/plain", []byte(b64))
+
+	var fullURL string
+	if asDraft {
+		fullURL = BaseURL + fmt.Sprintf("/me/mailFolders/%s/messages", url.PathEscape(destFolderID))
+	} else {
+		fullURL = BetaBaseURL + fmt.Sprintf("/me/mailFolders/%s/importMime", url.PathEscape(destFolderID))
+	}
+
+	data, err := c.postRaw(ctx, fullURL, "text/plain", []byte(b64))
 	if err != nil {
 		return "", err
 	}
@@ -156,32 +174,23 @@ func (c *Client) ImportMIME(ctx context.Context, destFolderID string, mime []byt
 }
 
 // PatchMessageMeta restores metadata that MIME import does not carry: read
-// state, follow-up flag, categories and the message flags (so an imported
-// message is not left as a draft). When fixDates is true, it also sets the
+// state, follow-up flag and categories. When fixDates is true, it also sets the
 // original received/sent timestamps via MAPI extended properties (best effort:
 // some tenants ignore writing these on an existing message — use VerifyDates to
-// detect that). isDraft keeps genuine Drafts-folder items marked as drafts.
-func (c *Client) PatchMessageMeta(ctx context.Context, msgID string, m Message, fixDates, isDraft bool) error {
-	body := buildPatchBody(m, fixDates, isDraft)
+// detect that).
+//
+// It no longer touches the draft/unsent flag: importMime already lands normal
+// mail as non-draft, and that flag cannot be changed on an existing message
+// anyway (see ImportMIME).
+func (c *Client) PatchMessageMeta(ctx context.Context, msgID string, m Message, fixDates bool) error {
+	body := buildPatchBody(m, fixDates)
 	return c.patchJSON(ctx, fmt.Sprintf("/me/messages/%s", url.PathEscape(msgID)), body)
 }
 
 // buildPatchBody assembles the PATCH payload. It is a pure function so the
 // extended-property wiring can be unit-tested without a live mailbox.
-func buildPatchBody(m Message, fixDates, isDraft bool) patchBody {
+func buildPatchBody(m Message, fixDates bool) patchBody {
 	body := patchBody{IsRead: m.IsRead, Flag: m.Flag, Categories: m.Categories}
-
-	// PR_MESSAGE_FLAGS: mark read and, unless this is a real draft, clear the
-	// draft (unsent) flag that MIME import leaves set.
-	flags := 0
-	if m.IsRead {
-		flags |= msgFlagRead
-	}
-	if isDraft {
-		flags |= msgFlagUnsent
-	}
-	body.SingleValueExtendedProperties = append(body.SingleValueExtendedProperties,
-		singleValueExtendedProperty{ID: propMessageFlags, Value: strconv.Itoa(flags)})
 
 	if fixDates {
 		if m.SentDateTime != "" {
@@ -196,12 +205,15 @@ func buildPatchBody(m Message, fixDates, isDraft bool) patchBody {
 	return body
 }
 
-// ListInternetMessageIDs returns the set of internetMessageId values already
-// present in a destination folder, for idempotent de-duplication across runs
-// (independent of the local state DB).
-func (c *Client) ListInternetMessageIDs(ctx context.Context, folderID string) (map[string]bool, error) {
-	ids := map[string]bool{}
-	next := fmt.Sprintf("/me/mailFolders/%s/messages?$top=100&$select=internetMessageId", url.PathEscape(folderID))
+// ListInternetMessageIDs maps each internetMessageId already present in a
+// destination folder to the destination message id(s) that carry it, for
+// idempotent de-duplication across runs (independent of the local state DB).
+// It is a slice because a folder may hold more than one copy of the same
+// internetMessageId (e.g. a leftover draft plus an earlier duplicate); with
+// --force every such copy is deleted before the message is re-imported.
+func (c *Client) ListInternetMessageIDs(ctx context.Context, folderID string) (map[string][]string, error) {
+	ids := map[string][]string{}
+	next := fmt.Sprintf("/me/mailFolders/%s/messages?$top=100&$select=id,internetMessageId", url.PathEscape(folderID))
 	for next != "" {
 		var page odataList[Message]
 		if err := c.getJSON(ctx, next, &page); err != nil {
@@ -209,7 +221,7 @@ func (c *Client) ListInternetMessageIDs(ctx context.Context, folderID string) (m
 		}
 		for _, m := range page.Value {
 			if m.InternetMessageID != "" {
-				ids[m.InternetMessageID] = true
+				ids[m.InternetMessageID] = append(ids[m.InternetMessageID], m.ID)
 			}
 		}
 		next = page.NextLink

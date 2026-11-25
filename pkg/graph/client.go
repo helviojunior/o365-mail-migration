@@ -18,6 +18,11 @@ import (
 // BaseURL is the Microsoft Graph v1.0 endpoint.
 const BaseURL = "https://graph.microsoft.com/v1.0"
 
+// BetaBaseURL is the Microsoft Graph beta endpoint. It is used only for the
+// importMime action, which is the sole way to import a MIME message into a
+// final, non-draft state and is not yet available on v1.0.
+const BetaBaseURL = "https://graph.microsoft.com/beta"
+
 // maxRetries bounds throttling/transient retries per request.
 const maxRetries = 6
 

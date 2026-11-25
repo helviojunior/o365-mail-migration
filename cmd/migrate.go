@@ -157,7 +157,7 @@ func init() {
 	migrateCmd.Flags().IntVar(&opts.Migrate.FolderConcurrency, "folder-concurrency", 1, "How many folders to migrate at once (each shows its own progress bar); 1 keeps per-mailbox request pressure low to avoid Graph throttling")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.DryRun, "dry-run", false, "List folders and message counts without copying")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
-	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy messages already recorded as migrated")
+	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy even already-migrated messages: scan the destination, DELETE any existing copy, and import a fresh one (replaces copies stuck as drafts)")
 	migrateCmd.Flags().IntVar(&opts.Migrate.MaxSizeMB, "max-size", 0, "Skip messages larger than this many MB (0 = no limit)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.Settings, "migrate-settings", true, "As a final step, migrate inbox rules and automatic replies (signatures have no Graph API)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.CheckDestination, "check-destination", true, "Skip messages already present in the destination folder (dedup against the destination, prevents duplicates on re-runs)")
