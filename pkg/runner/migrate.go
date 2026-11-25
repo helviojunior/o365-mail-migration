@@ -44,7 +44,13 @@ type Stats struct {
 	RulesCopied int64
 	RulesFailed int64
 	AutoReply   string // "applied", "skipped (none)", "failed" or ""
-	Signatures  string // always a "not supported via Graph" note when settings run
+
+	// Calendars & events (final step).
+	CalendarsRun    bool
+	CalendarsCopied int64 // destination calendars matched or created
+	EventsCopied    int64
+	EventsSkipped   int64
+	EventsFailed    int64
 }
 
 // dateTolerance is how far a copied timestamp may differ from the source before
@@ -196,12 +202,12 @@ func (m *Migrator) Run(ctx context.Context) (Stats, error) {
 }
 
 // MigrateSettings copies mailbox settings as a final step: inbox rules (with
-// folder references remapped to the destination), automatic replies, and a note
-// about signatures (which Microsoft Graph cannot migrate). It is called after
-// Run, when the live progress area is no longer active, so its logs are clean.
+// folder references remapped to the destination) and automatic replies. It is
+// called after Run, when the live progress area is no longer active, so its logs
+// are clean.
 func (m *Migrator) MigrateSettings(ctx context.Context) Stats {
 	m.stats.SettingsRun = true
-	log.Warn("Migrating mailbox settings (rules, automatic replies, signatures)...")
+	log.Warn("Migrating mailbox settings (rules, automatic replies)...")
 
 	// 1. Inbox rules.
 	if rules, err := m.src.GetInboxRules(ctx); err != nil {
@@ -237,10 +243,6 @@ func (m *Migrator) MigrateSettings(ctx context.Context) Stats {
 			log.Warnf("Automatic replies: applied (status=%s)", status)
 		}
 	}
-
-	// 3. Signatures — no Microsoft Graph API exists for Outlook signatures.
-	m.stats.Signatures = "not supported via Microsoft Graph"
-	log.Warn("Signatures cannot be migrated via Microsoft Graph (no API); set them manually or via Exchange Online PowerShell (Set-MailboxMessageConfiguration)")
 
 	return m.stats
 }

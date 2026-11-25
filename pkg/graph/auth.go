@@ -31,18 +31,24 @@ const DefaultAuthority = "https://login.microsoftonline.com"
 var DefaultScopes = []string{
 	"https://graph.microsoft.com/Mail.ReadWrite",
 	"https://graph.microsoft.com/MailboxSettings.ReadWrite",
+	"https://graph.microsoft.com/Calendars.Read", // source is read-only
 	"https://graph.microsoft.com/User.Read",
 }
 
-// DefaultDestScopes are the destination-side scopes. The destination also needs
-// Mail-Advanced.ReadWrite for the beta importMime action (used to land copied
-// messages in a final, non-draft state). This scope is NOT requested for the
-// source, which is only ever read from. If a tenant/app cannot consent to it,
-// imports fail with 403; override --scope to drop it and fall back to the
-// draft-producing import.
-var DefaultDestScopes = append([]string{
+// DefaultDestScopes are the destination-side scopes. Beyond the common set, the
+// destination needs Mail-Advanced.ReadWrite for the beta importMime action (to
+// land copied messages in a final, non-draft state) and Calendars.ReadWrite to
+// create calendars and events. These write scopes are NOT requested for the
+// source, which is only ever read from. If a tenant/app cannot consent to
+// Mail-Advanced.ReadWrite, imports fail with 403; override --scope to drop it
+// and fall back to the draft-producing import.
+var DefaultDestScopes = []string{
+	"https://graph.microsoft.com/Mail.ReadWrite",
 	"https://graph.microsoft.com/Mail-Advanced.ReadWrite",
-}, DefaultScopes...)
+	"https://graph.microsoft.com/MailboxSettings.ReadWrite",
+	"https://graph.microsoft.com/Calendars.ReadWrite",
+	"https://graph.microsoft.com/User.Read",
+}
 
 // ScopesForRole returns the delegated scopes to request for a role ("source" or
 // "destination"). A non-empty override (from --scope) wins for either role.

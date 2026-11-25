@@ -41,5 +41,6 @@ type Options struct {
 		VerifyDates       bool // re-read each copy and report date drift
 		CheckDestination  bool // skip messages already present in the destination folder
 		Settings          bool // final step: migrate inbox rules and automatic replies
+		Calendars         bool // final step: migrate calendars and events
 	}
 }

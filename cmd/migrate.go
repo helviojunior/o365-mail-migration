@@ -122,10 +122,15 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 			return err
 		}
 
-		// Final step: migrate mailbox settings (rules, automatic replies). Skipped
-		// on a retry-failed run, which is a targeted message retry only.
-		if opts.Migrate.Settings && !opts.Migrate.RetryFailed && !errors.Is(err, context.Canceled) {
-			stats = mig.MigrateSettings(ctx)
+		// Final steps: mailbox settings (rules, automatic replies) and calendars.
+		// Skipped on a retry-failed run, which is a targeted message retry only.
+		if !opts.Migrate.RetryFailed && !errors.Is(err, context.Canceled) {
+			if opts.Migrate.Settings {
+				stats = mig.MigrateSettings(ctx)
+			}
+			if opts.Migrate.Calendars {
+				stats = mig.MigrateCalendars(ctx)
+			}
 		}
 
 		summary := fmt.Sprintf(
@@ -141,8 +146,12 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 			summary += fmt.Sprintf("- Date drift (received/sent mismatch): **%d**\n", stats.DateDrift)
 		}
 		if stats.SettingsRun {
-			summary += fmt.Sprintf("- Inbox rules: **%d copied, %d failed**\n- Automatic replies: **%s**\n- Signatures: **%s**\n",
-				stats.RulesCopied, stats.RulesFailed, stats.AutoReply, stats.Signatures)
+			summary += fmt.Sprintf("- Inbox rules: **%d copied, %d failed**\n- Automatic replies: **%s**\n",
+				stats.RulesCopied, stats.RulesFailed, stats.AutoReply)
+		}
+		if stats.CalendarsRun {
+			summary += fmt.Sprintf("- Calendars: **%d**\n- Events: **%d copied, %d skipped, %d failed**\n",
+				stats.CalendarsCopied, stats.EventsCopied, stats.EventsSkipped, stats.EventsFailed)
 		}
 		fmt.Println(ascii.Markdown(summary))
 
@@ -192,7 +201,8 @@ func init() {
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy even already-migrated messages: scan the destination, DELETE any existing copy, and import a fresh one (replaces copies stuck as drafts)")
 	migrateCmd.Flags().IntVar(&opts.Migrate.MaxSizeMB, "max-size", 0, "Skip messages larger than this many MB (0 = no limit)")
-	migrateCmd.Flags().BoolVar(&opts.Migrate.Settings, "migrate-settings", true, "As a final step, migrate inbox rules and automatic replies (signatures have no Graph API)")
+	migrateCmd.Flags().BoolVar(&opts.Migrate.Settings, "migrate-settings", true, "As a final step, migrate inbox rules and automatic replies")
+	migrateCmd.Flags().BoolVar(&opts.Migrate.Calendars, "migrate-calendars", true, "As a final step, migrate calendars and their events (needs Calendars scopes; re-auth if added after your last sign-in)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.CheckDestination, "check-destination", true, "Skip messages already present in the destination folder (dedup against the destination, prevents duplicates on re-runs)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.FixDates, "fix-dates", true, "Also force the original received/sent dates via MAPI extended properties (0x0E06/0x0039)")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.VerifyDates, "verify-dates", false, "Re-read each copied message and report received/sent date drift (extra API call per message)")

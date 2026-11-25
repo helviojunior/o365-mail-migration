@@ -35,13 +35,18 @@ Built in the same style as [enumdns](https://github.com/helviojunior/enumdns)
    - **Inbox rules** (`/me/mailFolders/inbox/messageRules`), with any
      move/copy-to-folder actions remapped to the destination folders.
    - **Automatic replies / out-of-office** (`/me/mailboxSettings`).
-   - **Signatures** are **not** migrated: Microsoft Graph has no API for Outlook
-     (roaming) signatures. The run prints a note; set them manually or via
-     Exchange Online PowerShell (`Set-MailboxMessageConfiguration`).
+5. **Final step** (`--migrate-calendars`, default on) — migrate **calendars and
+   events**: each source calendar is matched by name (or created) in the
+   destination — the default calendar maps to the destination's default — and its
+   events are copied (`POST /me/calendars/{id}/events`). Single events and
+   recurring series (the series master, with its recurrence) are copied;
+   individual occurrences are regenerated from the series. The copy is resumable
+   and deduped via local state, so re-runs do not duplicate.
 
-> Settings migration needs the `MailboxSettings.ReadWrite` scope (now in the
-> defaults). If you authenticated before this was added, re-run `auth-source` /
-> `auth-destination` so the new scope is consented.
+> Settings migration needs `MailboxSettings.ReadWrite`; calendar migration needs
+> `Calendars.Read` (source) / `Calendars.ReadWrite` (destination). These are in
+> the defaults — if you authenticated before they were added, re-run
+> `auth-source` / `auth-destination` so the new scopes are consented.
 
 ### Running several migrations in parallel
 

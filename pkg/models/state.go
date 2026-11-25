@@ -44,7 +44,25 @@ type MessageMigration struct {
 	MigratedAt    time.Time `json:"migrated_at"`
 }
 
+// EventMigration tracks the state of a single calendar-event copy, so a calendar
+// migration is resumable and does not duplicate events on re-runs. Dedup is
+// keyed by the source event's iCalUId (stable per event) when present, falling
+// back to the source event id, scoped to the calendar.
+type EventMigration struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	DedupKey      string    `gorm:"uniqueIndex;size:768" json:"dedup_key"`
+	SourceEventID string    `gorm:"size:512" json:"source_event_id"`
+	ICalUID       string    `gorm:"size:512;index" json:"ical_uid"`
+	CalendarName  string    `gorm:"size:512;index" json:"calendar_name"`
+	DestEventID   string    `gorm:"size:512" json:"dest_event_id"`
+	Subject       string    `gorm:"size:512" json:"subject"`
+	StartAt       string    `gorm:"size:64" json:"start_at"`     // original start (dateTime), for the verbose report
+	Status        string    `gorm:"size:16;index" json:"status"` // pending | done | failed | skipped
+	Error         string    `gorm:"type:text" json:"error"`
+	MigratedAt    time.Time `json:"migrated_at"`
+}
+
 // All returns every model for AutoMigrate.
 func All() []interface{} {
-	return []interface{}{&Account{}, &FolderMap{}, &MessageMigration{}}
+	return []interface{}{&Account{}, &FolderMap{}, &MessageMigration{}, &EventMigration{}}
 }
