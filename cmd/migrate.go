@@ -49,11 +49,13 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 		defer stop()
 
 		// Source authenticator (read-only side).
-		srcAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.Authority, opts.Auth.Scopes, opts.Auth.SourceCache)
+		// The source is read-only, so it is not asked to consent to the
+		// destination-only Mail-Advanced.ReadWrite scope (needed for importMime).
+		srcAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.Authority, graph.ScopesForRole("source", opts.Auth.Scopes), opts.Auth.SourceCache)
 		if err != nil {
 			return err
 		}
-		dstAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.Authority, opts.Auth.Scopes, opts.Auth.DestCache)
+		dstAuth, err := graph.NewAuthenticator(opts.Auth.ClientID, opts.Auth.Tenant, opts.Auth.Authority, graph.ScopesForRole("destination", opts.Auth.Scopes), opts.Auth.DestCache)
 		if err != nil {
 			return err
 		}

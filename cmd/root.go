@@ -130,7 +130,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&opts.Auth.ClientID, "client-id", graph.DefaultClientID, "Public client (application) id used for interactive login")
 	rootCmd.PersistentFlags().StringVar(&opts.Auth.Tenant, "tenant", graph.DefaultTenant, "Tenant to authenticate against ('common', 'organizations' or a tenant id/domain)")
 	rootCmd.PersistentFlags().StringVar(&opts.Auth.Authority, "authority", graph.DefaultAuthority, "Entra ID login authority host (without the tenant segment)")
-	rootCmd.PersistentFlags().StringArrayVar(&opts.Auth.Scopes, "scope", graph.DefaultScopes, "Delegated OAuth scope (repeatable); defaults to the Microsoft Graph Mail scopes")
+	rootCmd.PersistentFlags().StringArrayVar(&opts.Auth.Scopes, "scope", nil, "Delegated OAuth scope (repeatable); overrides the per-role defaults (source: read/write Mail; destination: adds Mail-Advanced.ReadWrite for importMime)")
 
 	rootCmd.PersistentFlags().BoolVar(&localWorkspace, "local", false, "Store token caches and state in ./.o365migrate (current directory) instead of ~/.o365migrate, so multiple migrations can run in parallel from separate directories")
 	rootCmd.PersistentFlags().StringVar(&opts.Writer.CtrlDbURI, "state-db-uri", "", "Migration state DB URI (default sqlite at ~/.o365migrate/state.db)")

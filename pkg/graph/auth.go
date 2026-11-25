@@ -30,13 +30,30 @@ const DefaultAuthority = "https://login.microsoftonline.com"
 // offline_access/openid/profile automatically. Override with --scope.
 var DefaultScopes = []string{
 	"https://graph.microsoft.com/Mail.ReadWrite",
-	// Required by the beta importMime action (used to land copied messages in a
-	// final, non-draft state). If a tenant/app cannot consent to this scope,
-	// imports will fail with 403; override --scope to drop it and fall back to
-	// the draft-producing import.
-	"https://graph.microsoft.com/Mail-Advanced.ReadWrite",
 	"https://graph.microsoft.com/MailboxSettings.ReadWrite",
 	"https://graph.microsoft.com/User.Read",
+}
+
+// DefaultDestScopes are the destination-side scopes. The destination also needs
+// Mail-Advanced.ReadWrite for the beta importMime action (used to land copied
+// messages in a final, non-draft state). This scope is NOT requested for the
+// source, which is only ever read from. If a tenant/app cannot consent to it,
+// imports fail with 403; override --scope to drop it and fall back to the
+// draft-producing import.
+var DefaultDestScopes = append([]string{
+	"https://graph.microsoft.com/Mail-Advanced.ReadWrite",
+}, DefaultScopes...)
+
+// ScopesForRole returns the delegated scopes to request for a role ("source" or
+// "destination"). A non-empty override (from --scope) wins for either role.
+func ScopesForRole(role string, override []string) []string {
+	if len(override) > 0 {
+		return override
+	}
+	if role == "destination" {
+		return DefaultDestScopes
+	}
+	return DefaultScopes
 }
 
 // fileCache is an MSAL token-cache accessor backed by a single 0600 JSON file.
