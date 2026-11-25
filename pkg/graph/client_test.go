@@ -2,6 +2,7 @@ package graph
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"testing"
 	"time"
@@ -102,6 +103,33 @@ func TestBackoffDuration(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestIsPermanent(t *testing.T) {
+	cases := []struct {
+		status int
+		want   bool
+	}{
+		{400, true},  // bad request (e.g. read-only calendar)
+		{403, true},  // forbidden
+		{404, true},  // gone
+		{409, true},  // conflict
+		{413, true},  // too large
+		{408, false}, // request timeout -> transient
+		{429, false}, // throttled -> transient
+		{500, false}, // server error -> transient
+		{503, false}, // unavailable -> transient
+	}
+	for _, c := range cases {
+		err := &APIError{Status: c.status}
+		if got := IsPermanent(err); got != c.want {
+			t.Errorf("IsPermanent(%d) = %v, want %v", c.status, got, c.want)
+		}
+	}
+	// A non-HTTP error (e.g. network) is not classified as permanent.
+	if IsPermanent(errors.New("dial tcp: timeout")) {
+		t.Error("a non-API error must not be permanent")
+	}
 }
 
 func TestAbs(t *testing.T) {

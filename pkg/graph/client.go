@@ -102,6 +102,27 @@ func IsNotFound(err error) bool {
 	return errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound
 }
 
+// HTTPStatus returns the HTTP status of a Graph APIError, and whether err is one.
+func HTTPStatus(err error) (int, bool) {
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Status, true
+	}
+	return 0, false
+}
+
+// IsPermanent reports whether err is a Graph client error that will not succeed
+// on retry: a 4xx other than 429 (throttling) and 408 (request timeout), e.g.
+// 400 (bad request), 403 (forbidden), 404 (gone), 409 (conflict), 413 (too
+// large). Transient errors (network, 5xx, 429, 408) are not permanent.
+func IsPermanent(err error) bool {
+	status, ok := HTTPStatus(err)
+	if !ok {
+		return false // non-HTTP (e.g. network) errors may be transient
+	}
+	return status >= 400 && status < 500 && status != http.StatusTooManyRequests && status != http.StatusRequestTimeout
+}
+
 func (e *APIError) Error() string {
 	if code, msg, ok := parseGraphError(e.Body); ok {
 		if code != "" {

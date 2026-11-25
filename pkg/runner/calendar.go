@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -12,6 +13,11 @@ import (
 	"github.com/helviojunior/o365-mail-migration/pkg/models"
 	"gorm.io/gorm/clause"
 )
+
+// errReadOnlyDestCalendar signals that the destination calendar matching a
+// source calendar cannot be written to (e.g. a holidays or birthdays calendar),
+// so it is skipped instead of failing every event with a 400.
+var errReadOnlyDestCalendar = errors.New("destination calendar is read-only")
 
 // MigrateCalendars copies calendars and their events. It is the first step after
 // the mailbox copy. For each source calendar it finds or creates the matching
@@ -37,12 +43,12 @@ func (m *Migrator) MigrateCalendars(ctx context.Context) Stats {
 		log.Error("could not list destination calendars", "err", err)
 		return m.stats
 	}
-	destByName := map[string]string{}
-	destDefaultID := ""
+	destByName := map[string]graph.Calendar{}
+	var destDefault graph.Calendar
 	for _, c := range destCals {
-		destByName[c.Name] = c.ID
+		destByName[c.Name] = c
 		if c.IsDefaultCalendar {
-			destDefaultID = c.ID
+			destDefault = c
 		}
 	}
 
@@ -59,9 +65,13 @@ func (m *Migrator) MigrateCalendars(ctx context.Context) Stats {
 		if ctx.Err() != nil {
 			break
 		}
-		destID, err := m.ensureDestCalendar(ctx, sc, destByName, destDefaultID)
+		destID, err := m.ensureDestCalendar(ctx, sc, destByName, destDefault)
 		if err != nil {
-			log.Warnf("calendar %q: could not resolve destination: %v", sc.Name, err)
+			if errors.Is(err, errReadOnlyDestCalendar) {
+				log.Warnf("Calendar %q: destination is read-only (e.g. holidays/birthdays); skipping", sc.Name)
+			} else {
+				log.Warnf("calendar %q: could not resolve destination: %v", sc.Name, err)
+			}
 			continue
 		}
 		atomic.AddInt64(&m.stats.CalendarsCopied, 1)
@@ -104,23 +114,31 @@ func (m *Migrator) MigrateCalendars(ctx context.Context) Stats {
 
 // ensureDestCalendar returns the destination calendar id for a source calendar:
 // the destination default calendar for the source default, otherwise a
-// same-named calendar (created if missing). destByName is updated on create so a
-// repeated name is not created twice.
-func (m *Migrator) ensureDestCalendar(ctx context.Context, sc graph.Calendar, destByName map[string]string, destDefaultID string) (string, error) {
+// same-named calendar (created if missing). A matched destination calendar that
+// cannot be written to (holidays/birthdays, canEdit=false) returns
+// errReadOnlyDestCalendar so the caller skips it instead of failing every event.
+// destByName is updated on create so a repeated name is not created twice.
+func (m *Migrator) ensureDestCalendar(ctx context.Context, sc graph.Calendar, destByName map[string]graph.Calendar, destDefault graph.Calendar) (string, error) {
 	if sc.IsDefaultCalendar {
-		if destDefaultID == "" {
+		if destDefault.ID == "" {
 			return "", fmt.Errorf("destination has no default calendar")
 		}
-		return destDefaultID, nil
+		return destDefault.ID, nil
 	}
-	if id, ok := destByName[sc.Name]; ok {
-		return id, nil
+	if dc, ok := destByName[sc.Name]; ok {
+		if !dc.CanEdit {
+			return "", errReadOnlyDestCalendar
+		}
+		return dc.ID, nil
 	}
 	created, err := m.dst.CreateCalendar(ctx, sc.Name)
 	if err != nil {
 		return "", err
 	}
-	destByName[sc.Name] = created.ID
+	// A freshly created calendar is writable; remember it so a repeated source
+	// name is not created twice.
+	created.CanEdit = true
+	destByName[sc.Name] = created
 	return created.ID, nil
 }
 

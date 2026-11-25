@@ -388,7 +388,9 @@ func (m *Migrator) retry(ctx context.Context, what string, fn func() error) erro
 		if err = fn(); err == nil {
 			return nil
 		}
-		if ctx.Err() != nil || graph.IsNotFound(err) {
+		// Don't spin on cancellation or on a permanent client error (4xx such as
+		// 400/403/404): those never succeed on retry and only waste the delay.
+		if ctx.Err() != nil || graph.IsPermanent(err) {
 			return err
 		}
 		if attempt >= m.opts.Migrate.Retries {
