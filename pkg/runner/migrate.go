@@ -581,7 +581,7 @@ func (m *Migrator) RetryFailed(ctx context.Context) (Stats, error) {
 
 	log.Warnf("retry-failed: re-attempting %d failed message(s)...", len(failed))
 
-	var still []models.MessageMigration
+	var still []failedReport
 	for i := range failed {
 		if ctx.Err() != nil {
 			break
@@ -589,12 +589,13 @@ func (m *Migrator) RetryFailed(ctx context.Context) (Stats, error) {
 		rec := failed[i]
 		df, ok := byPath[rec.FolderPath]
 		if !ok || df.id == "" {
+			// The source message was never fetched, so there is no Outlook date.
 			m.markFailed(&rec, fmt.Errorf("no destination folder mapping for %q (re-run a normal migrate first)", rec.FolderPath))
-			still = append(still, rec)
+			still = append(still, failedReport{rec: rec, date: "N/A"})
 			continue
 		}
-		if err := m.retryFailedOne(ctx, &rec, df.id, df.isDraft); err != nil {
-			still = append(still, rec)
+		if date, err := m.retryFailedOne(ctx, &rec, df.id, df.isDraft); err != nil {
+			still = append(still, failedReport{rec: rec, date: date})
 		}
 	}
 
@@ -602,24 +603,35 @@ func (m *Migrator) RetryFailed(ctx context.Context) (Stats, error) {
 	return m.stats, ctx.Err()
 }
 
+// failedReport pairs a still-failed message with its Outlook received date (or
+// "N/A" when the message itself could not be fetched) for the verbose report.
+type failedReport struct {
+	rec  models.MessageMigration
+	date string
+}
+
 // retryFailedOne re-drives a single failed message's copy from its stored source
 // id. On success the row flips to "done"; on failure it stays "failed" (updated
-// error) and the error is returned.
-func (m *Migrator) retryFailedOne(ctx context.Context, rec *models.MessageMigration, destID string, isDraft bool) error {
+// error) and the error is returned. The first return value is the message's
+// Outlook received date formatted for the report, or "N/A" if the message could
+// not be fetched.
+func (m *Migrator) retryFailedOne(ctx context.Context, rec *models.MessageMigration, destID string, isDraft bool) (string, error) {
 	var msg graph.Message
 	if err := m.retry(ctx, "get message: "+rec.Subject, func() (e error) {
 		msg, e = m.src.GetMessage(ctx, rec.SourceMsgID)
 		return e
 	}); err != nil {
-		return m.markFailed(rec, fmt.Errorf("get source message: %w", err))
+		// Could not fetch the message -> no Outlook date to show.
+		return "N/A", m.markFailed(rec, fmt.Errorf("get source message: %w", err))
 	}
+	date := outlookDate(msg.ReceivedDateTime)
 
 	var mime []byte
 	if err := m.retry(ctx, "get MIME: "+rec.Subject, func() (e error) {
 		mime, e = m.src.GetMIME(ctx, rec.SourceMsgID)
 		return e
 	}); err != nil {
-		return m.markFailed(rec, fmt.Errorf("get MIME: %w", err))
+		return date, m.markFailed(rec, fmt.Errorf("get MIME: %w", err))
 	}
 
 	var newID string
@@ -627,7 +639,7 @@ func (m *Migrator) retryFailedOne(ctx context.Context, rec *models.MessageMigrat
 		newID, e = m.dst.ImportMIME(ctx, destID, mime, isDraft)
 		return e
 	}); err != nil {
-		return m.markFailed(rec, fmt.Errorf("import MIME: %w", err))
+		return date, m.markFailed(rec, fmt.Errorf("import MIME: %w", err))
 	}
 
 	if err := m.dst.PatchMessageMeta(ctx, newID, msg, m.opts.Migrate.FixDates); err != nil {
@@ -643,7 +655,19 @@ func (m *Migrator) retryFailedOne(ctx context.Context, rec *models.MessageMigrat
 	atomic.AddInt64(&m.stats.Copied, 1)
 	m.saveMsg(rec)
 	log.Infof("retry-failed: recovered %q", rec.Subject)
-	return nil
+	return date, nil
+}
+
+// outlookDate formats a Graph receivedDateTime (RFC3339, UTC) the way Outlook
+// shows it — in local time. It returns "N/A" when the value is missing.
+func outlookDate(iso string) string {
+	if iso == "" {
+		return "N/A"
+	}
+	if t, err := time.Parse(time.RFC3339, iso); err == nil {
+		return t.Local().Format("2006-01-02 15:04:05")
+	}
+	return iso
 }
 
 // markFailed records rec as failed with err and counts it.
@@ -657,25 +681,31 @@ func (m *Migrator) markFailed(rec *models.MessageMigration, err error) error {
 }
 
 // reportStillFailed prints a verbose, per-message block for messages that failed
-// again during retry-failed: subject, timestamp, source id and error.
-func (m *Migrator) reportStillFailed(still []models.MessageMigration) {
+// again during retry-failed: subject, folder path, Outlook date, source id and
+// error.
+func (m *Migrator) reportStillFailed(still []failedReport) {
 	if len(still) == 0 {
 		log.Warn("retry-failed: all retried messages were recovered")
 		return
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "## ⚠️ %d message(s) still failed after retry\n\n", len(still))
-	for _, r := range still {
+	for _, f := range still {
+		r := f.rec
 		subject := r.Subject
 		if subject == "" {
 			subject = "(no subject)"
+		}
+		path := r.FolderPath
+		if path == "" {
+			path = "(unknown folder)"
 		}
 		errMsg := r.Error
 		if errMsg == "" {
 			errMsg = "(no error recorded)"
 		}
-		fmt.Fprintf(&b, "- **%s**\n  - Date/time: %s\n  - ID: `%s`\n  - Error: %s\n",
-			subject, r.MigratedAt.Format("2006-01-02 15:04:05"), r.SourceMsgID, errMsg)
+		fmt.Fprintf(&b, "- **%s**\n  - Folder: `%s`\n  - Date/time: %s\n  - ID: `%s`\n  - Error: %s\n",
+			subject, path, f.date, r.SourceMsgID, errMsg)
 	}
 	fmt.Println(ascii.Markdown(b.String()))
 }
