@@ -229,6 +229,15 @@ func (c *Client) ListInternetMessageIDs(ctx context.Context, folderID string) (m
 	return ids, nil
 }
 
+// GetMessage fetches a single message's copy-relevant metadata by id (the same
+// projection ListMessages uses). Used by retry-failed to re-drive a copy from
+// only the stored source id, and to detect a source message that is now gone.
+func (c *Client) GetMessage(ctx context.Context, msgID string) (Message, error) {
+	var msg Message
+	err := c.getJSON(ctx, fmt.Sprintf("/me/messages/%s?$select=id,internetMessageId,subject,isRead,flag,categories,receivedDateTime,sentDateTime", url.PathEscape(msgID)), &msg)
+	return msg, err
+}
+
 // GetMessageDates reads back the received/sent timestamps of a message (used to
 // verify date fidelity after a copy).
 func (c *Client) GetMessageDates(ctx context.Context, msgID string) (received, sent string, err error) {

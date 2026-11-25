@@ -96,6 +96,8 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 
 		if opts.Migrate.DryRun {
 			log.Warn("dry-run: listing folders only, nothing will be copied")
+		} else if opts.Migrate.RetryFailed {
+			log.Warn("retry-failed: re-attempting only the messages recorded as failed")
 		} else if !opts.Migrate.Yes {
 			if !confirm(fmt.Sprintf("Migrate all e-mail from %s to %s?", srcUser.UserPrincipalName, dstUser.UserPrincipalName)) {
 				log.Warn("aborted by user")
@@ -106,13 +108,23 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 		// Blank line between the confirmation prompt and the progress output.
 		fmt.Println()
 
-		stats, err := mig.Run(ctx)
+		var stats runner.Stats
+		switch {
+		case opts.Migrate.DryRun:
+			// A dry run always just lists folders, never retries.
+			stats, err = mig.Run(ctx)
+		case opts.Migrate.RetryFailed:
+			stats, err = mig.RetryFailed(ctx)
+		default:
+			stats, err = mig.Run(ctx)
+		}
 		if err != nil && !errors.Is(err, context.Canceled) {
 			return err
 		}
 
-		// Final step: migrate mailbox settings (rules, automatic replies).
-		if opts.Migrate.Settings && !errors.Is(err, context.Canceled) {
+		// Final step: migrate mailbox settings (rules, automatic replies). Skipped
+		// on a retry-failed run, which is a targeted message retry only.
+		if opts.Migrate.Settings && !opts.Migrate.RetryFailed && !errors.Is(err, context.Canceled) {
 			stats = mig.MigrateSettings(ctx)
 		}
 
@@ -133,6 +145,21 @@ resumable: already-migrated messages are skipped unless ` + "`--force`" + ` is s
 				stats.RulesCopied, stats.RulesFailed, stats.AutoReply, stats.Signatures)
 		}
 		fmt.Println(ascii.Markdown(summary))
+
+		// Make any residual failure impossible to miss, after the summary.
+		if stats.Failed > 0 {
+			var b strings.Builder
+			fmt.Fprintf(&b, "## ⚠️ %d message(s) FAILED to migrate\n\n", stats.Failed)
+			if opts.Migrate.RetryFailed {
+				b.WriteString("These failed again on this retry and are listed above with full details " +
+					"(subject, time, id, error). They remain marked as failed in the state DB.\n")
+			} else {
+				b.WriteString("Even after automatic retries, these messages could not be copied. " +
+					"Retry only the failed ones (you get a verbose per-message report for any that fail again):\n\n" +
+					"    o365migrate migrate --retry-failed\n")
+			}
+			fmt.Println(ascii.Markdown(b.String()))
+		}
 
 		if errors.Is(err, context.Canceled) {
 			log.Warn("interrupted; re-run migrate to resume where it stopped")
@@ -160,6 +187,7 @@ func init() {
 	migrateCmd.Flags().IntVar(&opts.Migrate.FolderConcurrency, "folder-concurrency", 2, "How many folders to migrate at once (each shows its own progress bar); keep it low to avoid Graph per-mailbox throttling")
 	migrateCmd.Flags().IntVar(&opts.Migrate.Retries, "retries", 5, "Retry a failed message copy up to this many times before marking it failed (many Graph errors are transient); 0 disables retrying")
 	migrateCmd.Flags().DurationVar(&opts.Migrate.RetryDelay, "retry-delay", 5*time.Second, "Wait this long between the per-message retries from --retries")
+	migrateCmd.Flags().BoolVar(&opts.Migrate.RetryFailed, "retry-failed", false, "Retry ONLY the messages recorded as failed in the state DB, then print a verbose per-message report (subject, time, id, error) for any that fail again; skips folder creation and settings")
 	migrateCmd.Flags().BoolVar(&opts.Migrate.DryRun, "dry-run", false, "List folders and message counts without copying")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Yes, "yes", "y", false, "Skip the confirmation prompt")
 	migrateCmd.Flags().BoolVarP(&opts.Migrate.Force, "force", "F", false, "Re-copy even already-migrated messages: scan the destination, DELETE any existing copy, and import a fresh one (replaces copies stuck as drafts)")

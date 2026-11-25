@@ -30,6 +30,7 @@ type Options struct {
 		FolderConcurrency int
 		Retries           int           // per-message copy retries before marking failed
 		RetryDelay        time.Duration // delay between those retries
+		RetryFailed       bool          // retry only the messages recorded as failed
 		IncludeFolders    []string
 		ExcludeFolders    []string
 		DryRun            bool

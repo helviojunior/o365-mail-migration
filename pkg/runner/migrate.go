@@ -550,6 +550,136 @@ func (m *Migrator) fail(bar *ascii.FolderBar, rec *models.MessageMigration, err 
 	}
 }
 
+// RetryFailed re-attempts only the messages currently recorded as "failed" in
+// the state DB (independent of a normal run). It reuses the folder mapping
+// already recorded, so it creates no folders and scans no source folders. Each
+// message still gets the per-message --retries. Any message that fails AGAIN is
+// listed verbosely (subject, timestamp, source id, error) and left as failed.
+func (m *Migrator) RetryFailed(ctx context.Context) (Stats, error) {
+	var failed []models.MessageMigration
+	if err := m.db.Where("status = ?", "failed").Order("folder_path").Find(&failed).Error; err != nil {
+		return m.stats, fmt.Errorf("loading failed messages: %w", err)
+	}
+	if len(failed) == 0 {
+		log.Info("retry-failed: no messages recorded as failed; nothing to do")
+		return m.stats, nil
+	}
+
+	// Resolve folder path -> (destination folder id, isDraft) from folder_maps.
+	var fmaps []models.FolderMap
+	if err := m.db.Find(&fmaps).Error; err != nil {
+		return m.stats, fmt.Errorf("loading folder maps: %w", err)
+	}
+	type destFolder struct {
+		id      string
+		isDraft bool
+	}
+	byPath := map[string]destFolder{}
+	for _, f := range fmaps {
+		byPath[f.Path] = destFolder{id: f.DestFolderID, isDraft: strings.EqualFold(f.WellKnownName, "drafts")}
+	}
+
+	log.Warnf("retry-failed: re-attempting %d failed message(s)...", len(failed))
+
+	var still []models.MessageMigration
+	for i := range failed {
+		if ctx.Err() != nil {
+			break
+		}
+		rec := failed[i]
+		df, ok := byPath[rec.FolderPath]
+		if !ok || df.id == "" {
+			m.markFailed(&rec, fmt.Errorf("no destination folder mapping for %q (re-run a normal migrate first)", rec.FolderPath))
+			still = append(still, rec)
+			continue
+		}
+		if err := m.retryFailedOne(ctx, &rec, df.id, df.isDraft); err != nil {
+			still = append(still, rec)
+		}
+	}
+
+	m.reportStillFailed(still)
+	return m.stats, ctx.Err()
+}
+
+// retryFailedOne re-drives a single failed message's copy from its stored source
+// id. On success the row flips to "done"; on failure it stays "failed" (updated
+// error) and the error is returned.
+func (m *Migrator) retryFailedOne(ctx context.Context, rec *models.MessageMigration, destID string, isDraft bool) error {
+	var msg graph.Message
+	if err := m.retry(ctx, "get message: "+rec.Subject, func() (e error) {
+		msg, e = m.src.GetMessage(ctx, rec.SourceMsgID)
+		return e
+	}); err != nil {
+		return m.markFailed(rec, fmt.Errorf("get source message: %w", err))
+	}
+
+	var mime []byte
+	if err := m.retry(ctx, "get MIME: "+rec.Subject, func() (e error) {
+		mime, e = m.src.GetMIME(ctx, rec.SourceMsgID)
+		return e
+	}); err != nil {
+		return m.markFailed(rec, fmt.Errorf("get MIME: %w", err))
+	}
+
+	var newID string
+	if err := m.retry(ctx, "import MIME: "+rec.Subject, func() (e error) {
+		newID, e = m.dst.ImportMIME(ctx, destID, mime, isDraft)
+		return e
+	}); err != nil {
+		return m.markFailed(rec, fmt.Errorf("import MIME: %w", err))
+	}
+
+	if err := m.dst.PatchMessageMeta(ctx, newID, msg, m.opts.Migrate.FixDates); err != nil {
+		atomic.AddInt64(&m.stats.MetaFailed, 1)
+		log.Warnf("retry-failed: metadata patch failed for %q: %v", rec.Subject, err)
+	}
+
+	rec.DestMsgID = newID
+	rec.SizeBytes = int64(len(mime))
+	rec.Status = "done"
+	rec.Error = ""
+	rec.MigratedAt = time.Now()
+	atomic.AddInt64(&m.stats.Copied, 1)
+	m.saveMsg(rec)
+	log.Infof("retry-failed: recovered %q", rec.Subject)
+	return nil
+}
+
+// markFailed records rec as failed with err and counts it.
+func (m *Migrator) markFailed(rec *models.MessageMigration, err error) error {
+	rec.Status = "failed"
+	rec.Error = truncate(err.Error(), 1000)
+	rec.MigratedAt = time.Now()
+	atomic.AddInt64(&m.stats.Failed, 1)
+	m.saveMsg(rec)
+	return err
+}
+
+// reportStillFailed prints a verbose, per-message block for messages that failed
+// again during retry-failed: subject, timestamp, source id and error.
+func (m *Migrator) reportStillFailed(still []models.MessageMigration) {
+	if len(still) == 0 {
+		log.Warn("retry-failed: all retried messages were recovered")
+		return
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "## ⚠️ %d message(s) still failed after retry\n\n", len(still))
+	for _, r := range still {
+		subject := r.Subject
+		if subject == "" {
+			subject = "(no subject)"
+		}
+		errMsg := r.Error
+		if errMsg == "" {
+			errMsg = "(no error recorded)"
+		}
+		fmt.Fprintf(&b, "- **%s**\n  - Date/time: %s\n  - ID: `%s`\n  - Error: %s\n",
+			subject, r.MigratedAt.Format("2006-01-02 15:04:05"), r.SourceMsgID, errMsg)
+	}
+	fmt.Println(ascii.Markdown(b.String()))
+}
+
 func (m *Migrator) alreadyDone(dedupKey string) bool {
 	m.dbMu.Lock()
 	defer m.dbMu.Unlock()
