@@ -1,6 +1,9 @@
 package graph
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEventCreateBody(t *testing.T) {
 	src := map[string]interface{}{
@@ -11,6 +14,11 @@ func TestEventCreateBody(t *testing.T) {
 		"isAllDay":   false,
 		"categories": []interface{}{"Work"},
 		"recurrence": map[string]interface{}{"pattern": map[string]interface{}{"type": "weekly"}},
+		"body":       map[string]interface{}{"contentType": "html", "content": "<p>Agenda</p>"},
+		// Attendees — must NOT become real attendees (would send invites).
+		"attendees": []interface{}{
+			map[string]interface{}{"emailAddress": map[string]interface{}{"name": "Alice", "address": "alice@x.com"}, "type": "required"},
+		},
 		// Read-only / server-managed — must be dropped.
 		"id":              "AAA",
 		"iCalUId":         "040000...",
@@ -26,7 +34,7 @@ func TestEventCreateBody(t *testing.T) {
 
 	body := EventCreateBody(src)
 
-	mustHave := []string{"subject", "start", "end", "isAllDay", "categories", "recurrence"}
+	mustHave := []string{"subject", "start", "end", "isAllDay", "categories", "recurrence", "body"}
 	for _, k := range mustHave {
 		if _, ok := body[k]; !ok {
 			t.Errorf("writable field %q was not copied", k)
@@ -34,6 +42,7 @@ func TestEventCreateBody(t *testing.T) {
 	}
 
 	mustDrop := []string{
+		"attendees", // crucial: no real attendees -> no invitation emails
 		"id", "iCalUId", "organizer", "changeKey", "createdDateTime", "webLink",
 		"@odata.etag", "seriesMasterId", "location", // location is nil -> dropped
 	}
@@ -41,5 +50,12 @@ func TestEventCreateBody(t *testing.T) {
 		if _, ok := body[k]; ok {
 			t.Errorf("field %q should not be in the create body", k)
 		}
+	}
+
+	// The attendee list is preserved as text in the body instead.
+	b, _ := body["body"].(map[string]interface{})
+	content, _ := b["content"].(string)
+	if !strings.Contains(content, "alice@x.com") {
+		t.Errorf("attendee not preserved in body: %q", content)
 	}
 }

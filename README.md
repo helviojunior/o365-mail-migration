@@ -42,6 +42,10 @@ Built in the same style as [enumdns](https://github.com/helviojunior/enumdns)
    recurring series (the series master, with its recurrence) are copied;
    individual occurrences are regenerated from the series. The copy is resumable
    and deduped via local state, so re-runs do not duplicate.
+   - **No invitation emails are sent.** Microsoft Graph always emails invitations
+     when an event is created with attendees (it "can't be configured"), so
+     events are copied as appointments **without** attendees. The original
+     attendee list is appended to the event body for reference.
 
 > Settings migration needs `MailboxSettings.ReadWrite`; calendar migration needs
 > `Calendars.Read` (source) / `Calendars.ReadWrite` (destination). These are in

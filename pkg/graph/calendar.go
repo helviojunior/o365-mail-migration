@@ -3,7 +3,9 @@ package graph
 import (
 	"context"
 	"fmt"
+	"html"
 	"net/url"
+	"strings"
 )
 
 // Calendar is the subset of a calendar resource we use.
@@ -18,11 +20,19 @@ type Calendar struct {
 // copy body is assembled from exactly these (an allowlist), so server-managed
 // and read-only fields (id, iCalUId, organizer, changeKey, timestamps, …) are
 // never sent back and cannot make the create fail.
+//
+// IMPORTANT: "attendees" is deliberately excluded. Microsoft Graph sends meeting
+// invitations to every attendee whenever an event is created with an attendees
+// array, and the docs state this "can't be configured" (there is no Graph
+// equivalent of the EWS SendMeetingInvitations=SendToNone). During a migration
+// the attendees already have the original meeting, so re-sending invitations
+// from the new tenant would spam them. The copied event is therefore created as
+// an appointment (no attendees). The original attendee list is preserved for
+// reference by appendAttendeesToBody, not as real attendees.
 var eventWritableFields = []string{
 	"subject", "body", "start", "end", "location", "locations", "categories",
 	"importance", "sensitivity", "showAs", "isAllDay", "isReminderOn",
-	"reminderMinutesBeforeStart", "responseRequested", "recurrence",
-	"hideAttendees", "allowNewTimeProposals", "attendees",
+	"reminderMinutesBeforeStart", "recurrence",
 }
 
 // eventSelect is the $select used when listing source events: the writable
@@ -93,12 +103,67 @@ func (c *Client) DeleteEvent(ctx context.Context, eventID string) error {
 // EventCreateBody builds the create body for a destination event by copying only
 // the writable fields from a source event. Read-only/server fields are left out,
 // so the event lands as a plain copy (a new iCalUId is assigned by Graph).
+//
+// Attendees are NOT copied as real attendees (that would send invitations); the
+// original list is appended to the event body for reference instead.
 func EventCreateBody(src map[string]interface{}) map[string]interface{} {
-	body := make(map[string]interface{}, len(eventWritableFields))
+	body := make(map[string]interface{}, len(eventWritableFields)+1)
 	for _, k := range eventWritableFields {
 		if v, ok := src[k]; ok && v != nil {
 			body[k] = v
 		}
 	}
+	appendAttendeesToBody(body, src)
 	return body
+}
+
+// appendAttendeesToBody records the source event's attendees as text in the
+// event body, so the information is kept without creating real attendees (which
+// would trigger invitation emails). It is a no-op when there are no attendees.
+func appendAttendeesToBody(body, src map[string]interface{}) {
+	list := attendeeList(src)
+	if list == "" {
+		return
+	}
+	if b, ok := body["body"].(map[string]interface{}); ok {
+		content, _ := b["content"].(string)
+		if ct, _ := b["contentType"].(string); strings.EqualFold(ct, "html") {
+			b["content"] = content + "<hr><p><b>Attendees (migrated):</b> " + html.EscapeString(list) + "</p>"
+		} else {
+			b["content"] = content + "\n\n----\nAttendees (migrated): " + list
+		}
+		return
+	}
+	// The source event had no body: add a plain-text one.
+	body["body"] = map[string]interface{}{
+		"contentType": "text",
+		"content":     "Attendees (migrated): " + list,
+	}
+}
+
+// attendeeList renders a source event's attendees as "Name <addr>, ...".
+func attendeeList(src map[string]interface{}) string {
+	raw, ok := src["attendees"].([]interface{})
+	if !ok {
+		return ""
+	}
+	var parts []string
+	for _, a := range raw {
+		am, ok := a.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		ea, _ := am["emailAddress"].(map[string]interface{})
+		name, _ := ea["name"].(string)
+		addr, _ := ea["address"].(string)
+		switch {
+		case name != "" && addr != "" && name != addr:
+			parts = append(parts, fmt.Sprintf("%s <%s>", name, addr))
+		case addr != "":
+			parts = append(parts, addr)
+		case name != "":
+			parts = append(parts, name)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
